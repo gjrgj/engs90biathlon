@@ -5,6 +5,7 @@
 # Special thanks to the creators of paramiko and pyqtgraph, without them this project wouldn't have been possible.
 #
 # All code written by George Hito.
+# Currently only functional on OSX.
 
 import signal
 import time
@@ -84,19 +85,70 @@ def connectPi():
 	# setup logging
 	paramiko.util.log_to_file('demo_simple.log')
 
-	# get current wifi network
-	handle = os.popen("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I | awk '/ SSID/ {print substr($0, index($0, $2))}'")
-	while 1:
-		line = handle.readline()
-		if not line: 
-			break
-		wifi = line
+	# check if the biathlon rifle is within range
+	import objc
 
-	if str(wifi) == "biathlon_rifle\n":
+	objc.loadBundle('CoreWLAN',
+				bundle_path = '/System/Library/Frameworks/CoreWLAN.framework',
+				module_globals = globals())
+
+	iface = CWInterface.interface()
+
+	networks, error = iface.scanForNetworksWithName_error_('biathlon_rifle', None)
+	
+	# if no error, biathlon rifle is nearby
+	if str(error) == 'None':
 		print('Biathlon rifle is nearby.')
 	else:
 		print('Biathlon rifle is not nearby, please try and get closer to connect.')
 		sys.exit(2)
+
+	network = networks.anyObject()
+
+	# if not currently connected to rifle, try to connect to it
+	# returns currently connected wifi network
+	current_network = os.popen("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I | awk '/ SSID/ {print substr($0, index($0, $2))}'")
+	
+	# check if we are currently connected to rifle, if not then try to connect to it
+	connected_to_rifle = False
+	while 1:
+		line = current_network.readline()
+		if line == 'biathlon_rifle\n':
+			connected_to_rifle = True
+		if not line: 
+			break
+
+	if connected_to_rifle == False:
+		# if no error, successfully connected to rifle
+		success, error = iface.associateToNetwork_password_error_(network, 'biathlon', None)
+		if str(error) == 'None':
+			print('Successfully connected to rifle!')
+		else:
+			print('Unable to connnect to rifle')
+			sys.exit(2)
+	else:
+		print('Already connected to rifle!')
+	
+	# # returns list of nearby networks
+	# network_list = os.popen("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport --scan | awk '{print $1}'")
+
+	# # is rifle nearby? initialize to false.
+	# rifle_nearby = False
+
+	# while 1:
+	# 	line = network_list.readline()
+	# 	if line == 'biathlon_rifle\n':
+	# 		rifle_nearby = True
+	# 	if not line: 
+	# 		break
+
+	# # if rifle is nearby, proceed
+	# if rifle_nearby == True:
+	# 	print('Biathlon rifle is nearby.')
+	# else:
+	# 	print('Biathlon rifle is not nearby, please try and get closer to connect.')
+	# 	sys.exit(2)
+
 
 
 	# Paramiko client configuration
@@ -116,7 +168,7 @@ def connectPi():
 		client = paramiko.SSHClient()
 		client.load_system_host_keys()
 		client.set_missing_host_key_policy(paramiko.WarningPolicy())
-		print('*** Connecting...')
+		print('*** Starting ssh...')
 		if not UseGSSAPI and not DoGSSAPIKeyExchange:
 			client.connect(hostname, port, username, password)
 		else:
@@ -130,7 +182,7 @@ def connectPi():
 
 		chan = client.invoke_shell()
 		# print(repr(client.get_transport()))
-		print('*** Successfully connected to rifle!')
+		print('*** Successfully started ssh!')
 		run_started = True
 
 		# send relevant messages to start adc reading and print to terminal
@@ -154,15 +206,31 @@ def connectPi():
 							break
 
 						# save numbers once they start coming in, we assume both sensors are always connected
-						if x[:3] == 'Ch1':
+						# first check to see if both sensors are attached
+						# zero attached
+						# if len(x.split(' ')) == 2:
+						# 	print('No sensors attached!')
+						# only one attached
+						if len(x.split(' ')) == 3:
+							# check which one is attached
+							if x[:3] == 'Ch1':
+								adc_value1_temp = float(x.split(' ')[1])
+								adc_value1.append(adc_value1_temp)
+							elif x[:3] == 'Ch2':
+								adc_value2_temp = float(x.split(' ')[1])
+								adc_value2.append(adc_value2_temp)
+							ptr += 1
+							print(x + '\r')
+
+						# both attached
+						elif len(x.split(' ')) == 4:
 							adc_value1_temp = float(x.split(' ')[1])
 							adc_value1.append(adc_value1_temp)
-
 							adc_value2_temp = float(x.split(' ')[3])
 							adc_value2.append(adc_value2_temp)
-							ptr += 1	# increment ptr to update graph
-							print(x + '\r')
-							# sys.stdout.flush()
+							ptr += 1
+							print(x + '\r')						
+
 					except socket.timeout:
 						pass
 				if sys.stdin in r:
