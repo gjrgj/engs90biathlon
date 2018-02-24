@@ -16,10 +16,12 @@ import socket
 import sys
 import traceback
 import errno
+from datetime import datetime
 from timeout import timeout
 from paramiko.py3compat import input
 from paramiko.py3compat import u
 
+# paramiko for ssh
 import paramiko
 try:
     import termios
@@ -28,14 +30,18 @@ try:
 except ImportError:
     has_termios = False
 
-# plotting
+# plotting and GUI
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
-from pyqtgraph.Qt import QtGui, QtCore
+from pyqtgraph.Qt import QtGui, QtCore, QtWidgets
 import numpy as np
 import pyqtgraph as pg
 global curve1, curve2, app
+
+# opencv for laser tracking
+import cv2
+from processframe import ProcessFrame
 
 # set adc values as globals
 # these are lists that have each new value appended to them
@@ -63,10 +69,12 @@ class Worker(QRunnable):
 		'''
 		self.fn(*self.args, **self.kwargs)
 
+# wrapper for threadpool
 class WorkerPool():
 	def __init__(self, *args, **kwargs):
 		self.threadpool = QThreadPool()
 
+# connect to pi
 def connectPi():
 	global adc_value1, adc_value2, ptr, run_started, client, wifi
 
@@ -77,10 +85,6 @@ def connectPi():
 	# 	print("Please connect to the rifle.")
 	# 	sys.exit(1)
 
-	# get hostname
-	username = 'pi'
-	password = 'biathlon'
-	hostname = '192.168.4.1'
 
 	# setup logging
 	paramiko.util.log_to_file('demo_simple.log')
@@ -97,11 +101,32 @@ def connectPi():
 	networks, error = iface.scanForNetworksWithName_error_('biathlon_rifle', None)
 	
 	# if no error, biathlon rifle is nearby
-	if str(error) == 'None':
+	# if str(error) == 'None':
+	# 	print('Biathlon rifle is nearby.')
+	# else:
+	# 	print('Biathlon rifle is not nearby, please try and get closer to connect.')
+	# 	sys.exit(2)
+
+	# returns list of nearby networks
+	network_list = os.popen("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport --scan | awk '{print $1}'")
+
+	# is rifle nearby? initialize to false.
+	rifle_nearby = False
+
+	while 1:
+		line = network_list.readline()
+		if line == 'biathlon_rifle\n':
+			rifle_nearby = True
+		if not line: 
+			break
+
+	# if rifle is nearby, proceed
+	if rifle_nearby == True:
 		print('Biathlon rifle is nearby.')
 	else:
 		print('Biathlon rifle is not nearby, please try and get closer to connect.')
 		sys.exit(2)
+
 
 	network = networks.anyObject()
 
@@ -129,26 +154,6 @@ def connectPi():
 	else:
 		print('Already connected to rifle!')
 	
-	# # returns list of nearby networks
-	# network_list = os.popen("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport --scan | awk '{print $1}'")
-
-	# # is rifle nearby? initialize to false.
-	# rifle_nearby = False
-
-	# while 1:
-	# 	line = network_list.readline()
-	# 	if line == 'biathlon_rifle\n':
-	# 		rifle_nearby = True
-	# 	if not line: 
-	# 		break
-
-	# # if rifle is nearby, proceed
-	# if rifle_nearby == True:
-	# 	print('Biathlon rifle is nearby.')
-	# else:
-	# 	print('Biathlon rifle is not nearby, please try and get closer to connect.')
-	# 	sys.exit(2)
-
 
 
 	# Paramiko client configuration
@@ -156,7 +161,6 @@ def connectPi():
 	DoGSSAPIKeyExchange = paramiko.GSS_AUTH_AVAILABLE   # enable "gssapi-kex" key exchange, if supported by your python installation
 	# UseGSSAPI = False
 	# DoGSSAPIKeyExchange = False
-	port = 22
 
 	# adc_value initialized for two channels
 	adc_value1_temp = 0
@@ -165,6 +169,12 @@ def connectPi():
 
 	# now, connect and use paramiko Client to negotiate SSH2 across the connection
 	try:
+		# get hostname
+		username = 'pi'
+		password = 'biathlon'
+		hostname = '192.168.4.1'
+		port = 22
+		
 		client = paramiko.SSHClient()
 		client.load_system_host_keys()
 		client.set_missing_host_key_policy(paramiko.WarningPolicy())
@@ -173,6 +183,7 @@ def connectPi():
 			client.connect(hostname, port, username, password)
 		else:
 			try:
+
 				client.connect(hostname, port, username, gss_auth=UseGSSAPI,
 					gss_kex=DoGSSAPIKeyExchange)
 			except Exception:
@@ -252,30 +263,30 @@ def connectPi():
 			pass
 		sys.exit(1)
 
+# main graphics window
 class MainWindow(QMainWindow):
 	global window
 	keyPressed = QtCore.pyqtSignal()
 	def __init__(self, parent=None):
 		super(MainWindow, self).__init__(parent)
 		self.initUI()
+
+	def setFrame(self,frame):
+		pixmap = QPixmap.fromImage(frame)
+		self.label.setPixmap(pixmap)
 	
 	def initUI(self):
-		global app, adc1, adc2, curve1, curve2, ptr, window
+		global app, adc1, adc2, curve1, curve2, ptr, window, video
 
 		# define a top-level widget to hold everything
 		window = pg.GraphicsLayoutWidget()
-		# create grid to manage widget size and position
-		layout = QtGui.QGridLayout()
-		window.setLayout(layout)
+		window.setWindowTitle('Biathlon Team Data Processing')
 
 		# init graphs in widget
 		adc1 = window.addPlot(row=0,col=0,title="Hall Effect Sensor Voltage vs Time", 
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
 		adc2 = window.addPlot(row=0,col=1,title="Force Sensor Voltage vs Time",
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
-
-		# init buttons
-		# button = window.addItem(QtGui.Button(),row=1, col=0)
 
 		# antialiasing for better plots
 		pg.setConfigOptions(antialias=True)
@@ -320,31 +331,128 @@ class MainWindow(QMainWindow):
 		if event.key() == Qt.Key_Escape:
 			self.close()
 
+# handle ctrl+c elegantly
+def sigint_handler(*args):
+    """Handler for the SIGINT signal."""
+    sys.stderr.write('\r')
+    QtGui.QApplication.quit()
+
+# use openCV to track a laser in a video stream
+# class Video_display(QMainWindow):
+#     def __init__(self, parent=None):
+#         super(Second, self).__init__(parent)
+# def video_thread():
+# 	global video_frame
+# 	cam = cv2.VideoCapture(0)
+
+# 	while True:
+# 		ret_val, img = cam.read()
+# 		cv2.imshow("my webcam", img)
+	
+
+class Capture():
+	def __init__(self):
+		self.capturing = False
+		# CHANGE THIS TO SWITCH BETWEEN WEBCAM AND USB CAMERA
+		self.c = cv2.VideoCapture(0)
+
+	def startCapture(self):
+		print("pressed start")
+		self.capturing = True
+		cap = self.c
+		# captures video and processes for laser point
+		pf = ProcessFrame()
+		while(self.capturing):
+			ret, frame = cap.read()
+
+			if ret == True:
+				# Find the laser
+				center = pf.find_laser(frame)
+
+				# Find the targets
+				circles = pf.find_targets(frame)
+
+				# Draw circles
+				circles = np.uint16(np.around(circles))
+				for i in circles[0,:]:
+					cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
+					cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
+
+				# Draw laser
+				cv2.circle(frame, center, 6, (0, 255, 0), -1)
+
+				# display to user
+				cv2.namedWindow('Frame',cv2.WINDOW_AUTOSIZE)
+				frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 
+				cv2.imshow('Frame', frame)
+
+				if cv2.waitKey(25) & 0xFF == ord('q'): # Exit by pressing Q
+					break
+		cv2.destroyAllWindows()
+
+	def endCapture(self):
+		print ("pressed End")
+		self.capturing = False
+		# cv2.destroyAllWindows()
+
+	def quitCapture(self):
+		print ("pressed Quit")
+		cap = self.c
+		cv2.destroyAllWindows()
+		cap.release()
+		QtCore.QCoreApplication.quit()
+
+class VideoWindow(QtWidgets.QWidget):
+	def __init__(self):
+		QtWidgets.QWidget.__init__(self)
+		self.setWindowTitle('Control Panel')
+
+		self.capture = Capture()
+		self.start_button = QtGui.QPushButton('Start',self)
+		self.start_button.clicked.connect(self.capture.startCapture)
+
+		self.end_button = QtGui.QPushButton('End',self)
+		self.end_button.clicked.connect(self.capture.endCapture)
+
+		self.quit_button = QtGui.QPushButton('Quit',self)
+		self.quit_button.clicked.connect(self.capture.quitCapture)
+
+		vbox = QtGui.QVBoxLayout(self)
+		vbox.addWidget(self.start_button)
+		vbox.addWidget(self.end_button)
+		vbox.addWidget(self.quit_button)
+
+		self.setLayout(vbox)
+		self.setGeometry(100,100,200,200)
+		self.show()
+
+
 def main():
 	global adc_value1, adc_value2, app
 
 	# set up QT
 	app = QtGui.QApplication(sys.argv)
 
-	# multithread graphics and pi connections
+	# get current time to the microsecond, this will be used for syncing with pi
+	startTime = datetime.now()
+	print(startTime)
+
+	# multithread graphics, video, and pi connections
 	wp = WorkerPool()
+
 	dataWorker = Worker(connectPi)
 	wp.threadpool.start(dataWorker)
 
 	mainwindow = MainWindow()
+	video = VideoWindow()
 
 	# handle ctrl+c
 	signal.signal(signal.SIGINT, sigint_handler)
 	timer = QTimer()
 	timer.start(50)  # You may change this if you wish.
-	timer.timeout.connect(lambda: None)  # Let the interpreter run each 500 ms.
+	timer.timeout.connect(lambda: None)  # Let the interpreter run each 50 ms.
 
 	sys.exit(mainwindow.beginGraphics())
-
-def sigint_handler(*args):
-    """Handler for the SIGINT signal."""
-    sys.stderr.write('\r')
-    QtGui.QApplication.quit()
 
 
 if __name__ == '__main__':
