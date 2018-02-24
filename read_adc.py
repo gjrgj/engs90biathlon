@@ -372,6 +372,12 @@ class Capture():
 				# Find the targets
 				circles = pf.find_targets(frame)
 
+				# check if found, if not then stop capture
+				if circles is None:
+					print("No targets found.")
+					self.capturing = False
+					break
+
 				# Draw circles
 				circles = np.uint16(np.around(circles))
 				for i in circles[0,:]:
