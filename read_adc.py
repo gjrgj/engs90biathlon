@@ -43,6 +43,24 @@ global curve1, curve2, app
 import cv2
 from processframe import ProcessFrame
 
+# csv file writing, store latest run and init with column headers
+# for the filename, use the current datetime 
+import csv
+global fileName, filePointer, fileWriter
+# check to see if 'stored_data' directory exists
+if not os.path.exists("stored_data"):
+    os.makedirs("stored_data")
+
+# rounds time to seconds
+def round_seconds(dt):
+    result = []
+    date = dt.split()[0]
+    h, m, s = [dt.split()[1].split(':')[0],
+               dt.split()[1].split(':')[1],
+               str(round(float(dt.split()[1].split(':')[-1])))]
+    result = (date + ' ' + h + '.' + m + '.' + s)
+    return result
+
 # set adc values as globals
 # these are lists that have each new value appended to them
 global adc_value1, adc_value2, ptr
@@ -53,6 +71,7 @@ ptr = 0
 # other globals for usage to start/stop actions in other threads
 global run_started
 run_started = False
+
 
 # worker class for multithreading
 class Worker(QRunnable):
@@ -76,7 +95,7 @@ class WorkerPool():
 
 # connect to pi
 def connectPi():
-	global adc_value1, adc_value2, ptr, run_started, client, wifi
+	global adc_value1, adc_value2, ptr, run_started, client, wifi, fileWriter
 
 	# # first check if biathlon_rifle is current network
 	# if "biathlon_rifle" in subprocess.check_output("iwgetid -r"):
@@ -207,50 +226,64 @@ def connectPi():
 			chan.settimeout(0.0)
 			# send command to Pi to trigger data collection and gather the results through ssh
 			chan.send('python ~/biathlon/demo_readvoltage.py\n')
-			while True:
-				r, w, e = select.select([chan, sys.stdin], [], [])
-				if chan in r:
-					try:
-						x = u(chan.recv(1024))
-						if len(x) == 0:
-							sys.stdout.write('\r\n*** EOF\r\n')
-							break
 
-						# save numbers once they start coming in, we assume both sensors are always connected
-						# first check to see if both sensors are attached
-						# zero attached
-						# if len(x.split(' ')) == 2:
-						# 	print('No sensors attached!')
-						# only one attached
-						if len(x.split(' ')) == 3:
-							# check which one is attached
-							if x[:3] == 'Ch1':
+			# generate folder for writing to from current time
+			folderName = round_seconds(str(datetime.now()))
+			if not os.path.exists("stored_data/" + folderName):
+				os.makedirs("stored_data/" + folderName)
+			with open("sensor_data.csv", "w+") as filePointer:
+				filePointer.truncate()
+				fileWriter = csv.writer(filePointer, delimiter=',')
+				fileWriter.writerow(['Hall Effect Sensor (V)', 'Force Sensor (V)'])
+				while True:
+					r, w, e = select.select([chan, sys.stdin], [], [])
+					if chan in r:
+						try:
+							x = u(chan.recv(1024))
+							if len(x) == 0:
+								sys.stdout.write('\r\n*** EOF\r\n')
+								break
+
+							# save numbers once they start coming in, we assume both sensors are always connected
+							# first check to see if both sensors are attached
+							# zero attached
+							# if len(x.split(' ')) == 2:
+							# 	print('No sensors attached!')
+							# only one attached
+							if len(x.split(' ')) == 3:
+								# check which one is attached
+								if x[:3] == 'Ch1':
+									adc_value1_temp = float(x.split(' ')[1])
+									adc_value1.append(adc_value1_temp)
+									adc_value2.append(0)
+								elif x[:3] == 'Ch2':
+									adc_value2_temp = float(x.split(' ')[1])
+									adc_value2.append(adc_value2_temp)
+									adc_value1.append(0)
+								ptr += 1
+								print(x + '\r')
+
+							# both attached
+							elif len(x.split(' ')) == 4:
 								adc_value1_temp = float(x.split(' ')[1])
 								adc_value1.append(adc_value1_temp)
-							elif x[:3] == 'Ch2':
-								adc_value2_temp = float(x.split(' ')[1])
+								adc_value2_temp = float(x.split(' ')[3])
 								adc_value2.append(adc_value2_temp)
-							ptr += 1
-							print(x + '\r')
+								ptr += 1
+								print(x + '\r')
 
-						# both attached
-						elif len(x.split(' ')) == 4:
-							adc_value1_temp = float(x.split(' ')[1])
-							adc_value1.append(adc_value1_temp)
-							adc_value2_temp = float(x.split(' ')[3])
-							adc_value2.append(adc_value2_temp)
-							ptr += 1
-							print(x + '\r')						
+								# only add data to csv file when both sensors are outputting
+								fileWriter.writerow([adc_value1_temp, adc_value2_temp])
 
-					except socket.timeout:
-						pass
-				if sys.stdin in r:
-					x = sys.stdin.read(1)
-					if len(x) == 0:
-					    break
-					chan.send(x)
-					chan.close()
-					client.close()
+						except socket.timeout:
+							pass
+					if sys.stdin in r:
+						x = sys.stdin.read(1)
+						if len(x) == 0:
+						    break
+						chan.send(x)
+						chan.close()
+						client.close()
 
 		finally:
 			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
@@ -338,23 +371,15 @@ def sigint_handler(*args):
     QtGui.QApplication.quit()
 
 # use openCV to track a laser in a video stream
-# class Video_display(QMainWindow):
-#     def __init__(self, parent=None):
-#         super(Second, self).__init__(parent)
-# def video_thread():
-# 	global video_frame
-# 	cam = cv2.VideoCapture(0)
-
-# 	while True:
-# 		ret_val, img = cam.read()
-# 		cv2.imshow("my webcam", img)
-	
-
 class Capture():
 	def __init__(self):
 		self.capturing = False
 		# CHANGE THIS TO SWITCH BETWEEN WEBCAM AND USB CAMERA
-		self.c = cv2.VideoCapture(0)
+		self.c = cv2.VideoCapture(1)
+		if self.c.isOpened() == False:
+			print("No USB camera detected on computer. Please connect one and try again.")
+			# QtCore.QCoreApplication.quit()
+			os._exit(1)
 
 	def startCapture(self):
 		print("pressed start")
@@ -372,20 +397,16 @@ class Capture():
 				# Find the targets
 				circles = pf.find_targets(frame)
 
-				# check if found, if not then stop capture
-				if circles is None:
-					print("No targets found.")
-					self.capturing = False
-					break
+				# check if found, if not then just display the regular frame, if so then overlay tracking
+				if circles is not None and center is not None:
+					# Draw circles
+					circles = np.uint16(np.around(circles))
+					for i in circles[0,:]:
+						cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
+						cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
 
-				# Draw circles
-				circles = np.uint16(np.around(circles))
-				for i in circles[0,:]:
-					cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
-					cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
-
-				# Draw laser
-				cv2.circle(frame, center, 6, (0, 255, 0), -1)
+					# Draw laser
+					cv2.circle(frame, center, 6, (0, 255, 0), -1)
 
 				# display to user
 				cv2.namedWindow('Frame',cv2.WINDOW_AUTOSIZE)
@@ -441,7 +462,6 @@ def main():
 
 	# get current time to the microsecond, this will be used for syncing with pi
 	startTime = datetime.now()
-	print(startTime)
 
 	# multithread graphics, video, and pi connections
 	wp = WorkerPool()
