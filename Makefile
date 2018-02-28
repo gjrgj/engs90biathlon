@@ -13,8 +13,8 @@ env:
 
 # installs all dependencies
 deps: 
-	pip install pyqtgraph
 	pip install PyQt5
+	pip install pyqtgraph
 	pip install paramiko
 	pip install pyobjc
 	# pip install opencv-python==3.1.0.4

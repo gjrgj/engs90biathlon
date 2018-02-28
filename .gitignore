@@ -1,0 +1,4 @@
+# Ignore these directories from being uploaded to Git
+/venv
+/build
+/dist

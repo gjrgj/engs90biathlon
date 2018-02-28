@@ -2,7 +2,7 @@
 An app written for Engs 90 in partnership with the US Biathlon Team.
 
 # PREREQUISITES
-Have Python 3 installed on your computer. If you don't have it installed yet, copy and paste the following command into Terminal and press enter:
+Have Python 3 installed on your computer. If you don't have it installed yet, you can get it by using Homebrew. Copy and paste the following command into Terminal and press enter:
 
 `/usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"`
 
@@ -12,7 +12,7 @@ Once that's complete, run `brew install python3`. That's all for prereqs.
 Open up an instance of Terminal and navigate to the directory you wish your project files to be located in. First clone the repo with `git clone https://github.com/gjrgj/engs90biathlon.git`. Next, run the following commands in order:
 
 `make env`
-`source myenv/bin/activate`
+`source venv/bin/activate`
 `make app`
 
 We make use of Python virtual environments to standardize expected behavior.
@@ -25,5 +25,3 @@ Note that sometimes the connection isn't made on the first try. If that happens,
 # FAQ
 ## Why can I not access the internet during operation?
 Because our connection method of choice is ssh through WiFi, your computer disconnects from the current network it's connected to and connects to the Pi Zero on the rifle. This Pi Zero is not connected to the larger Internet. Using Bluetooth would mediate this problem but we would lose a significant amount of the connection range/reliability.
-
-
