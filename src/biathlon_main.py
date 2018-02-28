@@ -42,14 +42,7 @@ global curve1, curve2, app
 # opencv for laser tracking
 import cv2
 from processframe import ProcessFrame
-
-# csv file writing, store latest run and init with column headers
-# for the filename, use the current datetime 
-import csv
-global fileName, filePointer, fileWriter
-# check to see if 'stored_data' directory exists
-if not os.path.exists("stored_data"):
-    os.makedirs("stored_data")
+global video_out
 
 # rounds time to seconds
 def round_seconds(dt):
@@ -60,6 +53,17 @@ def round_seconds(dt):
                str(round(float(dt.split()[1].split(':')[-1])))]
     result = (date + ' ' + h + '.' + m + '.' + s)
     return result
+
+# csv file writing, store latest run and init with column headers
+# for the filename, use the current datetime 
+import csv
+print("Using openCV version " + str(cv2.__version__))
+global fileName, filePointer, fileWriter, folderName, csv_out
+# check to see if 'stored_data' directory exists
+if not os.path.exists("stored_data"):
+    os.makedirs("stored_data")
+	# set foldername for the run
+folderName = round_seconds(str(datetime.now()))
 
 # set adc values as globals
 # these are lists that have each new value appended to them
@@ -95,7 +99,7 @@ class WorkerPool():
 
 # connect to pi
 def connectPi():
-	global adc_value1, adc_value2, ptr, run_started, client, wifi, fileWriter
+	global adc_value1, adc_value2, ptr, run_started, client, wifi, fileWriter, filePointer, folderName
 
 	# # first check if biathlon_rifle is current network
 	# if "biathlon_rifle" in subprocess.check_output("iwgetid -r"):
@@ -228,62 +232,56 @@ def connectPi():
 			chan.send('python ~/biathlon/demo_readvoltage.py\n')
 
 			# generate folder for writing to from current time
-			folderName = round_seconds(str(datetime.now()))
 			if not os.path.exists("stored_data/" + folderName):
 				os.makedirs("stored_data/" + folderName)
-			with open("sensor_data.csv", "w+") as filePointer:
-				filePointer.truncate()
-				fileWriter = csv.writer(filePointer, delimiter=',')
-				fileWriter.writerow(['Hall Effect Sensor (V)', 'Force Sensor (V)'])
-				while True:
-					r, w, e = select.select([chan, sys.stdin], [], [])
-					if chan in r:
-						try:
-							x = u(chan.recv(1024))
-							if len(x) == 0:
-								sys.stdout.write('\r\n*** EOF\r\n')
-								break
-
-							# save numbers once they start coming in, we assume both sensors are always connected
-							# first check to see if both sensors are attached
-							# zero attached
-							# if len(x.split(' ')) == 2:
-							# 	print('No sensors attached!')
-							# only one attached
-							if len(x.split(' ')) == 3:
-								# check which one is attached
-								if x[:3] == 'Ch1':
-									adc_value1_temp = float(x.split(' ')[1])
-									adc_value1.append(adc_value1_temp)
-									adc_value2.append(0)
-								elif x[:3] == 'Ch2':
-									adc_value2_temp = float(x.split(' ')[1])
-									adc_value2.append(adc_value2_temp)
-									adc_value1.append(0)
-								ptr += 1
-								print(x + '\r')
-
-							# both attached
-							elif len(x.split(' ')) == 4:
-								adc_value1_temp = float(x.split(' ')[1])
-								adc_value1.append(adc_value1_temp)
-								adc_value2_temp = float(x.split(' ')[3])
-								adc_value2.append(adc_value2_temp)
-								ptr += 1
-								print(x + '\r')
-
-								# only add data to csv file when both sensors are outputting
-								fileWriter.writerow([adc_value1_temp, adc_value2_temp])
-
-						except socket.timeout:
-							pass
-					if sys.stdin in r:
-						x = sys.stdin.read(1)
+			filePointer = open("stored_data/" + folderName + "/sensor_data.csv", "w+")
+			fileWriter = csv.writer(filePointer, delimiter=',')
+			fileWriter.writerow(['Hall Effect Sensor (V)', 'Force Sensor (V)'])
+			while True:
+				r, w, e = select.select([chan, sys.stdin], [], [])
+				if chan in r:
+					try:
+						x = u(chan.recv(1024))
 						if len(x) == 0:
-						    break
-						chan.send(x)
-						chan.close()
-						client.close()
+							sys.stdout.write('\r\n*** EOF\r\n')
+							break
+
+						# save numbers once they start coming in, we assume both sensors are always connected
+						# first check to see if both sensors are attached
+						# only one attached
+						if len(x.split(' ')) == 3:
+							# check which one is attached
+							if x[:3] == 'Ch1':
+								adc_value1_temp = float(x.split(' ')[1])
+								adc_value2_temp = 0
+							elif x[:3] == 'Ch2':
+								adc_value1_temp = 0
+								adc_value2_temp = float(x.split(' ')[1])				
+							adc_value1.append(adc_value1_temp)
+							adc_value2.append(adc_value2_temp)
+							ptr += 1
+							print(x + '\r')
+							fileWriter.writerow([adc_value1_temp, adc_value2_temp])
+
+						# both attached
+						elif len(x.split(' ')) == 4:
+							adc_value1_temp = float(x.split(' ')[1])
+							adc_value2_temp = float(x.split(' ')[3])
+							adc_value1.append(adc_value1_temp)
+							adc_value2.append(adc_value2_temp)
+							ptr += 1
+							print(x + '\r')
+							fileWriter.writerow([adc_value1_temp, adc_value2_temp])
+
+					except socket.timeout:
+						pass
+				if sys.stdin in r:
+					x = sys.stdin.read(1)
+					if len(x) == 0:
+						break
+					chan.send(x)
+					chan.close()
+					client.close()
 
 		finally:
 			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
@@ -317,7 +315,7 @@ class MainWindow(QMainWindow):
 
 		# init graphs in widget
 		adc1 = window.addPlot(row=0,col=0,title="Hall Effect Sensor Voltage vs Time", 
-			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'}, xRange=[-100, 10], yRange=[-1,2])
 		adc2 = window.addPlot(row=0,col=1,title="Force Sensor Voltage vs Time",
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
 
@@ -366,27 +364,37 @@ class MainWindow(QMainWindow):
 
 # handle ctrl+c elegantly
 def sigint_handler(*args):
-    """Handler for the SIGINT signal."""
-    sys.stderr.write('\r')
-    QtGui.QApplication.quit()
+	"""Handler for the SIGINT signal."""
+	sys.stderr.write('\r')
+
+	QtGui.QApplication.quit()
+	# os._exit(1)
 
 # use openCV to track a laser in a video stream
 class Capture():
 	def __init__(self):
 		self.capturing = False
 		# CHANGE THIS TO SWITCH BETWEEN WEBCAM AND USB CAMERA
-		self.c = cv2.VideoCapture(1)
-		if self.c.isOpened() == False:
-			print("No USB camera detected on computer. Please connect one and try again.")
-			# QtCore.QCoreApplication.quit()
-			os._exit(1)
-
+		self.cam = cv2.VideoCapture(1)
+		if self.cam.isOpened() == False:
+			print("No USB camera detected on computer. Defaulting to front-facing camera.")
+			self.cam = cv2.VideoCapture(0)
+		self.camw = self.cam.get(cv2.CAP_PROP_FRAME_WIDTH)
+		self.camh = self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT)
+		
 	def startCapture(self):
+		global folderName
 		print("pressed start")
+
 		self.capturing = True
-		cap = self.c
 		# captures video and processes for laser point
 		pf = ProcessFrame()
+		cap = self.cam
+
+		# set up file logging too
+		fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+		out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.mp4", fourcc, 20.0, (int(self.camw),int(self.camh)))	
+
 		while(self.capturing):
 			ret, frame = cap.read()
 
@@ -411,6 +419,10 @@ class Capture():
 				# display to user
 				cv2.namedWindow('Frame',cv2.WINDOW_AUTOSIZE)
 				frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 
+
+				# write to file
+				out.write(frame)
+
 				cv2.imshow('Frame', frame)
 
 				if cv2.waitKey(25) & 0xFF == ord('q'): # Exit by pressing Q
@@ -424,7 +436,7 @@ class Capture():
 
 	def quitCapture(self):
 		print ("pressed Quit")
-		cap = self.c
+		cap = self.cam
 		cv2.destroyAllWindows()
 		cap.release()
 		QtCore.QCoreApplication.quit()
