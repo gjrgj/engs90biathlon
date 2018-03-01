@@ -57,12 +57,7 @@ def round_seconds(dt):
 # csv file writing, store latest run and init with column headers
 # for the filename, use the current datetime 
 import csv
-print("Using openCV version " + str(cv2.__version__))
 global fileName, filePointer, fileWriter, folderName
-# check to see if 'stored_data' directory exists
-if not os.path.exists("stored_data"):
-    os.makedirs("stored_data")
-
 # create folder for run beforehand, files will be created when connection is made/video stream started
 folderName = round_seconds(str(datetime.now()))
 if not os.path.exists("stored_data/" + folderName):
@@ -99,6 +94,14 @@ class Worker(QRunnable):
 class WorkerPool():
 	def __init__(self, *args, **kwargs):
 		self.threadpool = QThreadPool()
+
+# helper class to parse data coming from Pi, deal with disjoint network data transfer
+def RepresentsFloat(s):
+    try: 
+        float(s)
+        return True
+    except ValueError:
+        return False
 
 # connect to pi
 def connectPi():
@@ -247,11 +250,13 @@ def connectPi():
 								break
 
 							# save numbers once they start coming in, we assume both sensors are always connected
-							# first check to see if both sensors are attached
+							# first check to see if both sensors are attached, then tdo a test to see if any of the arrived values
+							# contain unexpected characters, if they do then ignore that line of input and process the next line input
+							
 							# only one attached
-							if len(x.split(' ')) == 3:
+							if len(x.split(' ')) == 3 and RepresentsFloat(float(x.split(' ')[1])):
 								# check which one is attached
-								if x[:3] == 'Ch1':
+								if x[:3] == 'Ch1':    																		
 									adc_value1_temp = float(x.split(' ')[1])
 									adc_value2_temp = 0
 								elif x[:3] == 'Ch2':
@@ -264,7 +269,7 @@ def connectPi():
 								fileWriter.writerow([adc_value1_temp, adc_value2_temp])
 
 							# both attached
-							elif len(x.split(' ')) == 4:
+							elif len(x.split(' ')) == 4 and RepresentsFloat(float(x.split(' ')[1])) and RepresentsFloat(float(x.split(' ')[3])):
 								adc_value1_temp = float(x.split(' ')[1])
 								adc_value2_temp = float(x.split(' ')[3])
 								adc_value1.append(adc_value1_temp)
@@ -272,6 +277,10 @@ def connectPi():
 								ptr += 1
 								print(x + '\r')
 								fileWriter.writerow([adc_value1_temp, adc_value2_temp])
+
+							# parsing error in incoming data, skip it
+							else:
+								continue
 
 						except socket.timeout:
 							pass
@@ -313,16 +322,58 @@ class MainWindow(QMainWindow):
 		window = pg.GraphicsLayoutWidget()
 		window.setWindowTitle('Biathlon Team Data Processing')
 
-		# init graphs in widget
+		# TEST CODE FOR SINGLE WINDOW GUI
+
+		# # add a view to that widget
+		# view = window.addViewBox() 
+
+		# lock the aspect ratio so the pixels are always aqure (true to life scale)
+		# view.setAspectLocked(True)
+
+		# init graphs in view
+		# Hall Effect sensor
+		# sub1 = window.addLayout()
+		# sub1.addLabel("Hall Effect Sensor Voltage vs Time")
+		# sub1.nextRow()
+		# v1 = sub1.addViewBox()
+		# adc1 = pg.PlotDataItem(title="Hall Effect Sensor Voltage vs Time", 
+		# 	labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+		# v1.addItem(adc1)
+
+		# # Force sensor
+		# sub2 = window.addLayout()
+		# sub2.addLabel("Force Sensor Voltage vs Time")
+		# sub2.nextRow()
+		# v2 = sub2.addViewBox()
+		# v2.setMouseMode(v2.RectMode)
+		# adc2 = pg.PlotDataItem(title="Force Sensor Voltage vs Time",
+		# 	labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+		# v2.addItem(adc2)
+
+		# window.nextRow()
+
+		# # Laser tracking display
+		# sub3 = window.addLayout()
+		# sub3.addLabel("Laser Tracking Display")
+		# sub3.nextRow()
+		# v3 = sub3.addViewBox()
+		# v3.setMouseMode(v3.RectMode)
+		# laser_img = pg.ImageItem(border='w')
+		# v3.addItem(laser_img)
+
 		adc1 = window.addPlot(row=0,col=0,title="Hall Effect Sensor Voltage vs Time", 
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+		
 		adc2 = window.addPlot(row=0,col=1,title="Force Sensor Voltage vs Time",
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+
 
 		# antialiasing for better plots
 		pg.setConfigOptions(antialias=True)
 
 		# set downsampling and clipping to reduce drawing load
+		# adc1.setDownsampling(method='peak')
+		# adc2.setDownsampling(method='peak')
 		adc1.setDownsampling(mode='peak')
 		adc2.setDownsampling(mode='peak')
 		adc1.setClipToView(True)
@@ -332,7 +383,19 @@ class MainWindow(QMainWindow):
 		adc1.setLimits(xMax=10, yMax=5, yMin=-1)
 		adc2.setRange(xRange=[-100, 10], yRange=[-1,5])
 		adc2.setLimits(xMax=10, yMax=5, yMin=-1)
+
+		# adc1.dataBounds(0,[-100, 10])
+		# adc1.dataBounds(1, [-1,5])
+		# adc2.dataBounds(0,[-100, 10])
+		# adc1.SetXRange(-100, 10)
+		# adc1.SetYRange(-1,5)
+		# adc2.SetXRange(-100, 10)
+		# adc2.SetYRange(-1,5)
+		# adc2.dataBounds(1, [-1,5])
+
 		# init curves
+		# curve1 = adc1.curve
+		# curve2 = adc2.curve
 		curve1 = adc1.plot(pen='y')
 		curve2 = adc2.plot(pen='y')
 
@@ -379,7 +442,7 @@ class QtCapture(QtGui.QWidget):
 		self.cap = cv2.VideoCapture(*args)
 		self.height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
 		self.width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-		self.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(self.width),int(self.height)))	
+		self.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.avi", cv2.VideoWriter_fourcc((*'XVID')), 20.0, (int(self.width),int(self.height)))	
 		self.video_frame = QtGui.QLabel()
 		lay = QtGui.QVBoxLayout()
 		# lay.setMargin(0)
@@ -392,8 +455,10 @@ class QtCapture(QtGui.QWidget):
 	def nextFrameSlot(self):
 		ret, frame = self.cap.read()
 		# My webcam yields frames in BGR format
-		# frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 		frame = laser_tracking_overlay(ret, frame, self.height, self.width)
+		# flip image around vertical axis
+		frame = cv2.flip(frame,0)
 		self.out.write(frame)
 		img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], QtGui.QImage.Format_RGB888)
 		pix = QtGui.QPixmap.fromImage(img)
@@ -410,71 +475,6 @@ class QtCapture(QtGui.QWidget):
 	def deleteLater(self):
 		self.cap.release()
 		super(QtGui.QWidget, self).deleteLater()
-
-
-# # use openCV to track a laser in a video stream
-# class Capture():
-# 	def __init__(self):
-# 		self.capturing = False
-# 		# gets the webcam when no usb camera is attached, otherwise gets the usb camera
-# 		self.cam = cv2.VideoCapture(0)
-# 		self.camw = self.cam.get(cv2.CAP_PROP_FRAME_WIDTH)
-# 		self.camh = self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT)
-				
-# 	def startCapture(self):
-# 		global folderName
-# 		print("pressed start")
-
-# 		self.capturing = True
-# 		# captures video and processes for laser point
-# 		pf = ProcessFrame()
-# 		cap = self.cam
-
-# 		out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(self.camw),int(self.camh)))
-# 		while(self.capturing):
-# 			ret, frame = cap.read()
-# 			if ret == True:
-# 				# Find the laser
-# 				center = pf.find_laser(frame)
-
-# 				# Find the targets
-# 				circles = pf.find_targets(frame)
-
-# 				# check if found, if not then just display the regular frame, if so then overlay tracking
-# 				if circles is not None and center is not None:
-# 					# Draw circles
-# 					circles = np.uint16(np.around(circles))
-# 					for i in circles[0,:]:
-# 						cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
-# 						cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
-
-# 					# Draw laser
-# 					cv2.circle(frame, center, 6, (0, 255, 0), -1)
-
-# 				# display to user
-# 				cv2.namedWindow('Frame',cv2.WINDOW_AUTOSIZE)
-# 				frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 
-
-# 				# write to file
-# 				out.write(frame)
-
-# 				cv2.imshow('Frame', frame)
-
-# 				if cv2.waitKey(25) & 0xFF == ord('q'): # Exit by pressing Q
-# 					break
-# 		cv2.destroyAllWindows()
-
-# 	def endCapture(self):
-# 		print ("pressed End")
-# 		self.capturing = False
-# 		# cv2.destroyAllWindows()
-
-# 	def quitCapture(self):
-# 		print ("pressed Quit")
-# 		cap = self.cam
-# 		cv2.destroyAllWindows()
-# 		cap.release()
-# 		QtCore.QCoreApplication.quit()
 
 def laser_tracking_overlay(ret, frame, width, height):
 	# laser tracking
@@ -564,6 +564,5 @@ def main():
 
 
 if __name__ == '__main__':
-	import sys
 	main()
 
