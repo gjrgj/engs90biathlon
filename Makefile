@@ -1,31 +1,42 @@
 #!/bin/bash
 # Makefile for biathlon project
 
-# runs application, make sure you have activated the virtual environment first and run make app
+# makes virtual environment and dependencies, you can run the project with make run
+all:
+	if [ ! -d "venv" ]; then \
+		make env; \
+	fi 
+	make deps; \
+	make run; \
+
+# runs application
 run:
-	python src/biathlon_main.py
+	source venv/bin/activate; \
+	python src/biathlon_main.py; \
 
 # sets up virtual environment
 env:
-	pip3 install virtualenv; \
-	python3 -m venv venv; \
-	source venv/bin/activate; \
+	if [ ! -d "venv" ]; then \
+		pip3 install virtualenv; \
+		python3 -m venv venv; \
+		source venv/bin/activate; \
+	fi
 
 # installs all dependencies
 deps: 
-	pip install PyQt5
-	pip install pyqtgraph
-	pip install paramiko
-	pip install pyobjc
-	# pip install opencv-python==3.1.0.4
-	pip install opencv-python
-	pip install pyinstaller==3.3.1
+	source venv/bin/activate; \
+	pip install PyQt5; \
+	pip install pyqtgraph; \
+	pip install paramiko; \
+	pip install pyobjc; \
+	pip install opencv-python; \
+	pip install pyinstaller==3.3.1; \
 
-# installs all dependencies and then makes the app, make sure you have activated the virtual environment first
-# Note tht this needs some work to debugs why all the dependencies are not included in the executable
+# installs all dependencies and then makes the single executable app, make sure you have activated the virtual environment first
+# Note that this is not currently functional and needs work.
 app:
-	make deps
-	pyinstaller src/biathlon_main.py --windowed
+	make deps; \
+	pyinstaller src/biathlon_main.py --windowed; \
 
 # removes everything except the virtual environment and code source files
 clean:

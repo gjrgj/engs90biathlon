@@ -9,15 +9,9 @@ Have Python 3 installed on your computer. If you don't have it installed yet, yo
 Once that's complete, run `brew install python3`. That's all for prereqs.
 
 # SETUP
-Open up an instance of Terminal and navigate to the directory you wish your project files to be located in. First clone the repo with `git clone https://github.com/gjrgj/engs90biathlon.git`. Next, run the following commands in order:
+Open up an instance of Terminal and navigate to the directory you wish your project files to be located in. First clone the repo with `git clone https://github.com/gjrgj/engs90biathlon.git`. Next, run `make all` and wait for everything to install. The application should start up automatically. In the future you can just type `make run` to boot it up. For more granularity in your installation check out the Makefile in the base directory.
 
-`make env`
-
-`source venv/bin/activate`
-
-`make run`
-
-We make use of Python virtual environments to standardize expected behavior.
+Note: We make use of Python virtual environments to standardize expected behavior.
 
 # OPERATION
 First, turn on the Pi Zero attached to your rifle. Make sure it has been on for at least a minute or so before proceeding as it takes a bit of time to set up the onboard wifi and DHCP server. Next, run the command `make run` in Terminal and wait for a connection to be made between your computer and the rifle. If successful, everything should boot up and data should begin being collected. If you wish to run laser tracking, click *Start* on the control panel that comes up.
