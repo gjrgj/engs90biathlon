@@ -22,6 +22,7 @@ deps:
 	pip install pyinstaller==3.3.1
 
 # installs all dependencies and then makes the app, make sure you have activated the virtual environment first
+# Note tht this needs some work to debugs why all the dependencies are not included in the executable
 app:
 	make deps
 	pyinstaller src/biathlon_main.py --windowed

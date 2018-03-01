@@ -16,7 +16,8 @@ import socket
 import sys
 import traceback
 import errno
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from timeout import timeout
 from paramiko.py3compat import input
 from paramiko.py3compat import u
@@ -29,6 +30,7 @@ try:
     has_termios = True
 except ImportError:
     has_termios = False
+global client
 
 # plotting and GUI
 from PyQt5.QtGui import *
@@ -42,7 +44,11 @@ global curve1, curve2, app
 # opencv for laser tracking
 import cv2
 from processframe import ProcessFrame
-global video_out
+global saved_frame, file_out, video_ready
+video_ready = False
+
+# cs file writing
+import csv
 
 # rounds time to seconds
 def round_seconds(dt):
@@ -55,19 +61,23 @@ def round_seconds(dt):
     return result
 
 # csv file writing, store latest run and init with column headers
-# for the filename, use the current datetime 
-import csv
-global fileName, filePointer, fileWriter, folderName
-# create folder for run beforehand, files will be created when connection is made/video stream started
-folderName = round_seconds(str(datetime.now()))
-if not os.path.exists("stored_data/" + folderName):
-	os.makedirs("stored_data/" + folderName)
+
+# foldername will be updated with each press of the Capture button
+global folderName, fileName, filePointer, fileWriter, isLogging, startTime
+isLogging = False
+
+# multithreading
+global wp
+
 
 # set adc values as globals
 # these are lists that have each new value appended to them
-global adc_value1, adc_value2, ptr
+global adc_value1, adc_value2, adc_value1_temp, adc_value2_temp, ptr, dataReceivedFromPi
 adc_value1 = [0]
 adc_value2 = [0]
+adc_value1_temp = 0
+adc_value2_temp = 0
+dataReceivedFromPi = False
 ptr = 0
 
 # other globals for usage to start/stop actions in other threads
@@ -105,15 +115,7 @@ def RepresentsFloat(s):
 
 # connect to pi
 def connectPi():
-	global adc_value1, adc_value2, ptr, run_started, client, wifi, fileWriter, filePointer, folderName
-
-	# # first check if biathlon_rifle is current network
-	# if "biathlon_rifle" in subprocess.check_output("iwgetid -r"):
-	# 	print("Connected to rifle!")
-	# else:
-	# 	print("Please connect to the rifle.")
-	# 	sys.exit(1)
-
+	global adc_value1, adc_value2, adc_value1_temp, adc_value2_temp, ptr, run_started, client, wifi, fileWriter, filePointer, folderName, client, dataReceivedFromPi
 
 	# setup logging
 	paramiko.util.log_to_file('demo_simple.log')
@@ -128,13 +130,6 @@ def connectPi():
 	iface = CWInterface.interface()
 
 	networks, error = iface.scanForNetworksWithName_error_('biathlon_rifle', None)
-	
-	# if no error, biathlon rifle is nearby
-	# if str(error) == 'None':
-	# 	print('Biathlon rifle is nearby.')
-	# else:
-	# 	print('Biathlon rifle is not nearby, please try and get closer to connect.')
-	# 	sys.exit(2)
 
 	# returns list of nearby networks
 	network_list = os.popen("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport --scan | awk '{print $1}'")
@@ -194,7 +189,6 @@ def connectPi():
 	# adc_value initialized for two channels
 	adc_value1_temp = 0
 	adc_value2_temp = 0
-	time = 0
 
 	# now, connect and use paramiko Client to negotiate SSH2 across the connection
 	try:
@@ -212,7 +206,6 @@ def connectPi():
 			client.connect(hostname, port, username, password)
 		else:
 			try:
-
 				client.connect(hostname, port, username, gss_auth=UseGSSAPI,
 					gss_kex=DoGSSAPIKeyExchange)
 			except Exception:
@@ -236,62 +229,55 @@ def connectPi():
 			chan.settimeout(0.0)
 			# send command to Pi to trigger data collection and gather the results through ssh
 			chan.send('python ~/biathlon/demo_readvoltage.py\n')
-			with open("stored_data/" + folderName + "/sensor_data.csv", "w+") as filePointer:
-				fileWriter = csv.writer(filePointer, delimiter=',')
-				# write column headers
-				fileWriter.writerow(['Hall Effect Sensor Voltage (V)', 'Force Sensor Voltage (V)'])
-				while True:
-					r, w, e = select.select([chan, sys.stdin], [], [])
-					if chan in r:
-						try:
-							x = u(chan.recv(1024))
-							if len(x) == 0:
-								sys.stdout.write('\r\n*** EOF\r\n')
-								break
-
-							# save numbers once they start coming in, we assume both sensors are always connected
-							# first check to see if both sensors are attached, then tdo a test to see if any of the arrived values
-							# contain unexpected characters, if they do then ignore that line of input and process the next line input
-							
-							# only one attached
-							if len(x.split(' ')) == 3 and RepresentsFloat(float(x.split(' ')[1])):
-								# check which one is attached
-								if x[:3] == 'Ch1':    																		
-									adc_value1_temp = float(x.split(' ')[1])
-									adc_value2_temp = 0
-								elif x[:3] == 'Ch2':
-									adc_value1_temp = 0
-									adc_value2_temp = float(x.split(' ')[1])				
-								adc_value1.append(adc_value1_temp)
-								adc_value2.append(adc_value2_temp)
-								ptr += 1
-								print(x + '\r')
-								fileWriter.writerow([adc_value1_temp, adc_value2_temp])
-
-							# both attached
-							elif len(x.split(' ')) == 4 and RepresentsFloat(float(x.split(' ')[1])) and RepresentsFloat(float(x.split(' ')[3])):
-								adc_value1_temp = float(x.split(' ')[1])
-								adc_value2_temp = float(x.split(' ')[3])
-								adc_value1.append(adc_value1_temp)
-								adc_value2.append(adc_value2_temp)
-								ptr += 1
-								print(x + '\r')
-								fileWriter.writerow([adc_value1_temp, adc_value2_temp])
-
-							# parsing error in incoming data, skip it
-							else:
-								continue
-
-						except socket.timeout:
-							pass
-					if sys.stdin in r:
-						x = sys.stdin.read(1)
+			while True:
+				r, w, e = select.select([chan, sys.stdin], [], [])
+				if chan in r:
+					try:
+						x = u(chan.recv(1024))
 						if len(x) == 0:
+							sys.stdout.write('\r\n*** EOF\r\n')
 							break
-						chan.send(x)
-						chan.close()
-						client.close()
+						dataReceivedFromPi = True
+						# save numbers once they start coming in, we assume both sensors are always connected
+						# first check to see if both sensors are attached, then tdo a test to see if any of the arrived values
+						# contain unexpected characters, if they do then ignore that line of input and process the next line input		
+						
+						# only one attached
+						if len(x.split(' ')) == 3 and RepresentsFloat(x.split(' ')[1]):
+							# check which one is attached
+							if x[:3] == 'Ch1':    																		
+								adc_value1_temp = math.sqrt(float(x.split(' ')[1]))
+								adc_value2_temp = 0
+							elif x[:3] == 'Ch2':
+								adc_value1_temp = 0
+								adc_value2_temp = float(x.split(' ')[1])				
+							adc_value1.append(adc_value1_temp)
+							adc_value2.append(adc_value2_temp)
+							ptr += 1
+							print(x + '\r')
 
+						# both attached
+						elif len(x.split(' ')) == 4 and RepresentsFloat(x.split(' ')[1]) and RepresentsFloat(x.split(' ')[3]):
+							adc_value1_temp = math.sqrt(float(x.split(' ')[1]))
+							adc_value2_temp = float(x.split(' ')[3])
+							adc_value1.append(adc_value1_temp)
+							adc_value2.append(adc_value2_temp)
+							ptr += 1
+							print(x + '\r')
+
+						# parsing error in incoming data, skip it
+						else:
+							continue
+
+					except socket.timeout:
+						pass
+				if sys.stdin in r:
+					x = sys.stdin.read(1)
+					if len(x) == 0:
+						break
+					chan.send(x)
+					chan.close()
+					client.close()
 		finally:
 			termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
 	except Exception as e:
@@ -303,6 +289,32 @@ def connectPi():
 			pass
 		sys.exit(1)
 
+# opens and writes to a CSV file
+def writeToCSV():
+	global fileWriter, folderName, isLogging, adc_value1_temp, adc_value2_temp, dataReceivedFromPi
+	with open("stored_data/" + folderName + "/sensor_data.csv", "w+") as filePointer:
+		fileWriter = csv.writer(filePointer, delimiter=',')
+		# write column headers
+		fileWriter.writerow(['Square Root of Hall Effect Sensor Voltage (V)', 'Force Sensor Voltage (V)', 'Time (seconds)'])
+		# update startTime for csv logging
+		startTime = datetime.now()
+		# while capturing, write to file
+		while isLogging:
+    		# write data as soon as it arrives then wait for next data to arrive
+			if dataReceivedFromPi:
+				# get current time passed since start in seconds
+				toSeconds = float((datetime.now() - startTime).total_seconds())
+				fileWriter.writerow([adc_value1_temp, adc_value2_temp, str(toSeconds)])
+				dataReceivedFromPi = False
+
+def writeToVideoFile():
+	global isLogging, saved_frame, file_out, video_ready
+	# only log to file if capture is started
+	while isLogging:
+		if video_ready:
+			file_out.write(saved_frame)
+			video_ready = False
+    
 # main graphics window
 class MainWindow(QMainWindow):
 	global window
@@ -362,7 +374,7 @@ class MainWindow(QMainWindow):
 		# v3.addItem(laser_img)
 
 		adc1 = window.addPlot(row=0,col=0,title="Hall Effect Sensor Voltage vs Time", 
-			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+			labels={'left': 'Square Root of Voltage (V)', 'bottom': 'Time (seconds)'})
 		
 		adc2 = window.addPlot(row=0,col=1,title="Force Sensor Voltage vs Time",
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
@@ -379,7 +391,7 @@ class MainWindow(QMainWindow):
 		adc1.setClipToView(True)
 		adc2.setClipToView(True)
 		# set axis parameters
-		adc1.setRange(xRange=[-100, 10], yRange=[-1,5])
+		adc1.setRange(xRange=[-100, 10], yRange=[math.sqrt(2.5),math.sqrt(5)])
 		adc1.setLimits(xMax=10, yMax=5, yMin=-1)
 		adc2.setRange(xRange=[-100, 10], yRange=[-1,5])
 		adc2.setLimits(xMax=10, yMax=5, yMin=-1)
@@ -436,30 +448,47 @@ def sigint_handler(*args):
 # used to capture video stream
 class QtCapture(QtGui.QWidget):
 	def __init__(self, *args):
+		global isLogging
 		super(QtGui.QWidget, self).__init__()
 
-		self.fps = 24
 		self.cap = cv2.VideoCapture(*args)
+		# set camera resolution to 1280x720 to allow us to take 60 fps video, 640x480 can be used for 120 fps and 1920x1080 can be used for 30 fps.
+		# set fps as well
+		self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
+		self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,1280)
+		self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
+		self.cap.set(cv2.CAP_PROP_FPS, 60)
+		self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+		# save height and width for easy access
 		self.height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
 		self.width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-		self.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.avi", cv2.VideoWriter_fourcc((*'XVID')), 20.0, (int(self.width),int(self.height)))	
+		self.out = 0
 		self.video_frame = QtGui.QLabel()
 		lay = QtGui.QVBoxLayout()
-		# lay.setMargin(0)
+
 		lay.addWidget(self.video_frame)
 		self.setLayout(lay)
+
+		# turn file logging on or off
+		isLogging = False
+		print("resolution = " + str(self.width) + "x" + str(self.height))
+		print("fps = " + str(self.fps))
+
 
 	def setFPS(self, fps):
 		self.fps = fps
 
 	def nextFrameSlot(self):
+		global isLogging, saved_frame, video_ready
 		ret, frame = self.cap.read()
-		# My webcam yields frames in BGR format
-		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 		frame = laser_tracking_overlay(ret, frame, self.height, self.width)
-		# flip image around vertical axis
-		frame = cv2.flip(frame,0)
-		self.out.write(frame)
+		video_ready = True
+		saved_frame = frame
+		# convert frame colors for proper display
+		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+		# resize frame to smaller size for ease of display
+		frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 	
 		img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], QtGui.QImage.Format_RGB888)
 		pix = QtGui.QPixmap.fromImage(img)
 		self.video_frame.setPixmap(pix)
@@ -476,18 +505,15 @@ class QtCapture(QtGui.QWidget):
 		self.cap.release()
 		super(QtGui.QWidget, self).deleteLater()
 
+# laser tracking
 def laser_tracking_overlay(ret, frame, width, height):
-	# laser tracking
+	# the nitty-gritty math is abstracted away in the ProcessFrame() class
 	pf = ProcessFrame()
-
-	# out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(self.camw),int(self.camh)))
 	if ret == True:
 		# Find the laser
 		center = pf.find_laser(frame)
-
 		# Find the targets
 		circles = pf.find_targets(frame)
-
 		# check if found, if not then just display the regular frame, if so then overlay tracking
 		if circles is not None and center is not None:
 			# Draw circles
@@ -495,11 +521,8 @@ def laser_tracking_overlay(ret, frame, width, height):
 			for i in circles[0,:]:
 				cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
 				cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
-
 			# Draw laser
 			cv2.circle(frame, center, 6, (0, 255, 0), -1)
-
-		# frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 
 		return frame
 
 class VideoWindow(QtWidgets.QWidget):
@@ -508,60 +531,86 @@ class VideoWindow(QtWidgets.QWidget):
 		self.setWindowTitle('Control Panel')
 
 		self.capture = 0
-		self.start_button = QtGui.QPushButton('Start',self)
+		self.start_button = QtGui.QPushButton('Start Data Capture',self)
 		self.start_button.clicked.connect(self.startCapture)
 
-		self.end_button = QtGui.QPushButton('End',self)
+		self.end_button = QtGui.QPushButton('End Data Capture',self)
 		self.end_button.clicked.connect(self.endCapture)
+
+		self.exit_button = QtGui.QPushButton('Exit Program',self)
+		self.exit_button.clicked.connect(self.exitProgram)
 
 		vbox = QtGui.QVBoxLayout(self)
 		vbox.addWidget(self.start_button)
 		vbox.addWidget(self.end_button)
+		vbox.addWidget(self.exit_button)
 
 		self.setLayout(vbox)
 		self.setGeometry(100,100,200,200)
 		self.show()
-	def startCapture(self):
+
+		# start video stream
 		if not self.capture:
 			self.capture = QtCapture(0)
-			self.end_button.clicked.connect(self.capture.stop)
+			self.exit_button.clicked.connect(self.capture.stop)
 			# self.capture.setFPS(1)
 			self.capture.setParent(self)
 			self.capture.setWindowFlags(QtCore.Qt.Tool)
 		self.capture.start()
 		self.capture.show()
+
+	# start capture does the following:
+	# 1) Generates a folder according to the timestamp that the button was clicked
+	# 2) Opens a .csv file that immediately begins logging data from the Pi (that is already coming in)
+	# 3) Opens a .avi file that immediately begins writing frames from the attached camera (that are already coming in)
+	def startCapture(self):
+		global folderName, startTime, isLogging, wp, file_out
+		# only runs if not currently capturing
+		if not isLogging:
+			startTime = datetime.now()
+			# create folder
+			folderName = round_seconds(str(startTime))
+			if not os.path.exists("stored_data/" + folderName):
+				os.makedirs("stored_data/" + folderName)
+			isLogging = True
+			# multithread csv writing
+			csvWorker = Worker(writeToCSV)
+			wp.threadpool.start(csvWorker)
+			# set up video writer and activate it, also multithread
+			self.capture.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.mp4", cv2.VideoWriter_fourcc((*'mp4v')), self.capture.fps, (int(self.capture.width),int(self.capture.height)))	
+			file_out = self.capture.out
+			videoWorker = Worker(writeToVideoFile)
+			wp.threadpool.start(videoWorker)
 		
 	def endCapture(self):
-		self.capture.close()
-		self.capture = None
-
+		global isLogging
+		isLogging = False
+		self.capture.out = 0
+	
+	# exit program and handle closing all resources
+	def exitProgram(self):
+		if isLogging:
+			self.capture.close()
+			self.capture.deleteLater()
+		client.close()
+		qApp.exit();
 
 def main():
-	global adc_value1, adc_value2, app
+	global adc_value1, adc_value2, app, wp
 
 	# set up QT
 	app = QtGui.QApplication(sys.argv)
-
 	# get current time to the microsecond, this will be used for syncing with pi
 	startTime = datetime.now()
-
-	# multithread graphics, video, and pi connections
+	# set up threadpool and begin connection to pi
 	wp = WorkerPool()
-
 	dataWorker = Worker(connectPi)
 	wp.threadpool.start(dataWorker)
-
+	# init graphics
 	mainwindow = MainWindow()
 	video = VideoWindow()
-
-	# handle ctrl+c
-	signal.signal(signal.SIGINT, sigint_handler)
-	timer = QTimer()
-	timer.start(50)  # You may change this if you wish.
-	timer.timeout.connect(lambda: None)  # Let the interpreter run each 50 ms.
-
+	# init qt event loop
 	sys.exit(mainwindow.beginGraphics())
-
 
 if __name__ == '__main__':
 	main()
