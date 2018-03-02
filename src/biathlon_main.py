@@ -45,11 +45,12 @@ global curve1, curve2, app
 # opencv for laser tracking
 import cv2
 from processframe import ProcessFrame
-global saved_frame, file_out, video_ready
-video_ready = False
 
-# cs file writing
+# csv and video file writing
 import csv
+from Queue import Queue
+global frame_queue
+frame_queue = Queue()
 
 # rounds time to seconds
 def round_seconds(dt):
@@ -62,15 +63,14 @@ def round_seconds(dt):
     return result
 
 # file loading globals
-global csvToLoad, videoToLoad, isLoading, adc_value1_loaded, adc_value2_loaded, timestamps_loaded
+global csvToLoad, videoToLoad, isLoading, adc_value1_loaded, adc_value2_loaded, timestamps_loaded, ptr_load
 adc_value1_loaded = [0]
 adc_value2_loaded = [0]
 timestamps_loaded = [0]
 isLoading = False
-ptr_load = 0
 
 # video
-global frame, video
+global video
 
 # foldername will be updated with each press of the Capture button
 global folderName, fileName, filePointer, fileWriter, isLogging, startTime
@@ -120,7 +120,7 @@ def RepresentsFloat(s):
 
 # connect to pi
 def connectPi():
-	global adc_value1, adc_value2, adc_value1_temp, adc_value2_temp, ptr, client, wifi, fileWriter, filePointer, folderName, client, dataReceivedFromPi, currentTime, timestamps, connectionStartTime
+	global adc_value1, adc_value2, adc_value1_temp, adc_value2_temp, ptr, client, client, dataReceivedFromPi, currentTime, timestamps, connectionStartTime
 	# setup logging
 	# paramiko.util.log_to_file('demo_simple.log')
 
@@ -225,6 +225,8 @@ def connectPi():
 							print(x + '\r')
 							currentTime = datetime.now()
 							timestamps.append(float((currentTime - connectionStartTime).total_seconds()))
+							if isLogging:
+								writeToCSV()
 
 						# both attached
 						elif len(x.split(' ')) == 4 and RepresentsFloat(x.split(' ')[1]) and RepresentsFloat(x.split(' ')[3]):
@@ -236,6 +238,8 @@ def connectPi():
 							print(x + '\r')
 							currentTime = datetime.now()							
 							timestamps.append(float((currentTime - connectionStartTime).total_seconds()))
+							if isLogging:
+								writeToCSV()
 
 						# parsing error in incoming data, skip it
 						else:
@@ -264,22 +268,12 @@ def connectPi():
 
 # opens and writes to a CSV file
 def writeToCSV():
-	global fileWriter, folderName, isLogging, adc_value1_temp, adc_value2_temp, dataReceivedFromPi, currentTime
-	with open("stored_data/" + folderName + "/sensor_data.csv", "w+") as filePointer:
-		fileWriter = csv.writer(filePointer, delimiter=',')
-		# write column headers
-		fileWriter.writerow(['Square Root of Hall Effect Sensor Voltage (V)', 'Force Sensor Voltage (V)', 'Time (seconds)'])
-		# update startTime for csv logging
-		startLoggingTime= datetime.now()
-		# while capturing, write to file
-		while isLogging:
-    		# monopulse arriving data signal
-			if dataReceivedFromPi:
-				# get current time passed since start in seconds
-				toSeconds = float((currentTime - startLoggingTime).total_seconds())
-				# write values to 4 decimal points
-				fileWriter.writerow(["{0:.4f}".format(adc_value1_temp), "{0:.4f}".format(adc_value2_temp), "{0:.4f}".format(toSeconds)])
-				dataReceivedFromPi = False
+	global fileWriter, folderName, isLogging, adc_value1_temp, adc_value2_temp, dataReceivedFromPi, currentTime, filePointer, startTime
+	with open("stored_data/" + folderName + "/sensor_data.csv", "a") as filePointer:
+		# get current time passed since start in seconds
+		toSeconds = float((datetime.now() - startTime).total_seconds())
+		# write values to 4 decimal points
+		csv.writer(filePointer, delimiter=',').writerow(["{0:.4f}".format(adc_value1_temp), "{0:.4f}".format(adc_value2_temp), "{0:.4f}".format(toSeconds)])
 
 
 # main graphics window
@@ -303,11 +297,8 @@ class MainWindow(QMainWindow):
 
 		adc1 = window.addPlot(row=0,col=0,title="Hall Effect Sensor Voltage vs Time", 
 			labels={'left': 'Square Root of Voltage (V)', 'bottom': 'Time (seconds)'})
-		
-		
 		adc2 = window.addPlot(row=0,col=1,title="Force Sensor Voltage vs Time",
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
-
 
 		# antialiasing for better plots
 		pg.setConfigOptions(antialias=True)
@@ -317,6 +308,7 @@ class MainWindow(QMainWindow):
 		adc2.setDownsampling(mode='peak')
 		adc1.setClipToView(True)
 		adc2.setClipToView(True)
+
 		# set axis parameters
 		# adc1.setRange(xRange=[-100, 10], yRange=[math.sqrt(3),math.sqrt(3.7)])
 		adc1.setRange(xRange=[-10, 1], yRange=[-1,5])
@@ -328,16 +320,21 @@ class MainWindow(QMainWindow):
 		curve2 = adc2.plot(pen='y')
 
 	def beginGraphics(self):
-		global app, adc1, adc2, curve1, curve2, ptr, window, timestamps
+		global app, adc1, adc2, curve1, curve2, ptr, window, timestamps, isLoading, adc_value1_loaded, adc_value2_loaded, timestamps_loaded, ptr_load
 
 		# updates plots in real-time and keeps the most recent values the focus
 		def update():
-			global curve1, curve2, adc_value1, adc_value2, ptr
-			# set data for curve
-			curve1.setData(timestamps[:ptr], adc_value1[:ptr])
-			curve1.setPos(-timestamps[ptr-1], 0)
-			curve2.setData(timestamps[:ptr], adc_value2[:ptr])
-			curve2.setPos(-timestamps[ptr-1], 0)
+    		# check if loading or displaying realtime data, then set curve data accordingly
+			if isLoading:
+				curve1.setData(timestamps_loaded[:ptr_load], adc_value1_loaded[:ptr_load])
+				curve1.setPos(-timestamps_loaded[ptr_load-1], 0)
+				curve2.setData(timestamps_loaded[:ptr_load], adc_value2_loaded[:ptr_load])
+				curve2.setPos(-timestamps_loaded[ptr_load-1], 0)
+			else:
+				curve1.setData(timestamps[:ptr], adc_value1[:ptr])
+				curve1.setPos(-timestamps[ptr-1], 0)
+				curve2.setData(timestamps[:ptr], adc_value2[:ptr])
+				curve2.setPos(-timestamps[ptr-1], 0)
 
 		timer = QtCore.QTimer()
 		timer.timeout.connect(update)
@@ -390,20 +387,24 @@ class QtCapture(QtGui.QWidget):
 		self.fps = fps
 
 	def displayNextFrame(self):
-		global isLogging, frame
+		global isLogging, frame_queue, isLoading
 		# display frame either from live usb camera or loaded file depending on current mode
 		if not isLoading:
 			ret, frame = self.cap.read()
 			frame = laser_tracking_overlay(ret, frame, self.height, self.width)
 		else:
-			frame = self.capLoaded.read()
+			ret, frame = self.capLoaded.read()
+		if isLogging:
+			# add frame to queue to be written
+			frame_queue.put(frame)
+			# draw recording symbol on video feed to show it's capturing
+			cv2.circle(frame,(int(self.width - 60), int(60)), 30, (0, 0, 255), -1)
+			cv2.putText(frame, 'REC', (int(self.width - 165), int(70)), cv2.FONT_HERSHEY_PLAIN, 2,(0,0,0), 4, lineType=8)
+		if not isLogging and frame_queue.empty == False:
+			cv2.putText(frame, 'PROCESSING FRAMES', (int(self.width/30), int(self.height/2)), cv2.FONT_HERSHEY_PLAIN, 7,(0,0,0), 7, lineType=8)
+			cv2.putText(frame, 'PLEASE WAIT', (int(23*self.width/100), int(2 * self.height/3)), cv2.FONT_HERSHEY_PLAIN, 7,(0,0,0), 8, lineType=8)
 		# resize frame to smaller size for ease of display
 		frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 
-		# only save frame if logging
-		if isLogging and self.out != 0:	
-			# wait for a bit to write video at correct rate
-			time.sleep(1/self.fps)		
-			self.out.write(frame)
 		# convert frame colors for proper display
 		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)	
 		img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], QtGui.QImage.Format_RGB888)
@@ -422,6 +423,14 @@ class QtCapture(QtGui.QWidget):
 		self.cap.release()
 		super(QtGui.QWidget, self).deleteLater()
 
+
+# utilize a queue/buffer to separate video file writing from the main thread so it doesn't block anything
+def videoFileWriting():
+	global frame_queue, isLogging, video, isLogging
+	# only save frame if logging
+	while frame_queue.empty() == False:
+		video.capture.out.write(frame_queue.get())
+		time.sleep(1/video.capture.fps)
 
 # laser tracking
 def laser_tracking_overlay(ret, frame, width, height):
@@ -443,7 +452,7 @@ def laser_tracking_overlay(ret, frame, width, height):
 			cv2.circle(frame, center, 6, (0, 255, 0), -1)
 		return frame
 
-
+# control panel 
 class VideoWindow(QtWidgets.QWidget):
 	def __init__(self):
 		QtWidgets.QWidget.__init__(self)
@@ -487,7 +496,9 @@ class VideoWindow(QtWidgets.QWidget):
 	# 2) Opens a .csv file that immediately begins logging data from the Pi (that is already coming in)
 	# 3) Opens a .avi file that immediately begins writing frames from the attached camera (that are already coming in)
 	def startCapture(self):
-		global folderName, startTime, isLogging, wp, file_out
+		global folderName, startTime, isLogging, wp, fileWriter, frame_queue
+		# reset the contents of frame_queue
+		frame_queue = Queue()
 		# only runs if not currently capturing
 		if not isLogging and not isLoading:
 			startTime = datetime.now()
@@ -496,53 +507,67 @@ class VideoWindow(QtWidgets.QWidget):
 			if not os.path.exists("stored_data/" + folderName):
 				os.makedirs("stored_data/" + folderName)
 			isLogging = True
-			# multithread csv writing
-			csvWorker = Worker(writeToCSV)
-			wp.threadpool.start(csvWorker)
+			# write to CSV file, column headers first
+			with open("stored_data/" + folderName + "/sensor_data.csv", "w+") as filePointer:
+				csv.writer(filePointer, delimiter=',').writerow(['Square Root of Hall Effect Sensor Voltage (V)', 'Force Sensor Voltage (V)', 'Time (seconds)'])
 			# set up video writer
-			self.capture.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.mp4", cv2.VideoWriter_fourcc((*'mp4v')), self.capture.fps, (int(self.capture.width),int(self.capture.height)))	
-			print("resolution = " + str(self.capture.width) + "x" + str(self.capture.height))
-			print("fps = " + str(self.capture.fps))
+			self.capture.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.avi", cv2.VideoWriter_fourcc((*'XVID')), self.capture.fps, (int(self.capture.width),int(self.capture.height)))
 
 	# end current capture and set logging to false
 	def endCapture(self):
-		global isLogging
+		global isLogging, isLoading, wp
+		# write all frames to file first, turn off logging too
 		isLogging = False
-		self.capture.out = 0
+		videoWorker = Worker(videoFileWriting)
+		wp.threadpool.start(videoWorker)	
 
 	# can only load data if not logging, so if this is pressed will end current logging and load from disk
 	def loadCapture(self):
-		global adc_value1_loaded, adc_value2_loaded, timestamps_loaded, ptr_load
+		global adc_value1_loaded, adc_value2_loaded, timestamps_loaded, ptr_load, wp
     	# end current capture if there is one happening
-		self.endCapture()
-		# choose directory
+		if isLogging == True:
+			self.endCapture()
+		# reset loading vars
+		adc_value1_loaded = [0]
+		adc_value2_loaded = [0]
+		timestamps_loaded = [0]
+		ptr_load = 0
+
 		loadedDataDir = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
+		isLoading = True
 		# load video file and begin displaying
-		self.capture.capLoaded = VideoCapture(loadedDataDir + "/laser_data.mp4")
-		# load csv file and begin graphing
-		# after loading each value, sleep for as long as the read timestamp to simulate a real run
-		with open(loadedDataDir + "/sensor_data.csv", 'rb') as csvfile:
+		self.capture.capLoaded = cv2.VideoCapture(loadedDataDir + "/laser_data.avi")
+		# load csv file and begin graphing, after loading each value, sleep for as long as the read timestamp to simulate a real run
+		with open(loadedDataDir + "/sensor_data.csv", 'rt', encoding='utf8') as csvfile:
 			sensor_data = csv.reader(csvfile, delimiter=',')
-			# for row in sensor_data:
-    		# 	# parse each row and pull data out
+			# iterate through all rows but skip header
+			next(sensor_data,None)
+			for row in sensor_data:
+    			# parse each row and pull data out, append to data lists at same rate as it came in
+				adc_value1_loaded.append(float(row[0]))
+				adc_value2_loaded.append(float(row[1]))
+				timestamps_loaded.append(float(row[2]))
+				ptr_load += 1
+				time.sleep(abs(timestamps_loaded[ptr_load-2]-timestamps_loaded[ptr_load-1]))
+				# check if still loading, if it has been overridden by user then close file
+				if not isLoading:
+					break
+		isLoading = False
 				
-
-			isLoading = True
-
-		print(loadedDataDir)
-	
 	# exit program and handle closing all resources
 	def exitProgram(self):
-		global isLogging
-		if isLogging:
+		global isLogging, isLoading
+		if isLogging or isLoading:
+			isLoading = False
 			isLogging = False
 			self.capture.close()
 			self.capture.deleteLater()
 		client.close()
 		qApp.exit();
 
+
 def main():
-	global adc_value1, adc_value2, app, wp
+	global adc_value1, adc_value2, app, wp, video
 	# set up QT
 	app = QtGui.QApplication(sys.argv)
 	# set up threadpool and begin connection to pi

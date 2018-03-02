@@ -27,6 +27,7 @@ deps:
 	pip install PyQt5; \
 	pip install pyqtgraph; \
 	pip install paramiko; \
+	pip install ffmpeg-python; \
 	pip install opencv-python; \
 	pip install pyinstaller==3.3.1; \
 
