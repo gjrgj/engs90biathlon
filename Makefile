@@ -27,7 +27,6 @@ deps:
 	pip install PyQt5; \
 	pip install pyqtgraph; \
 	pip install paramiko; \
-	pip install pyobjc; \
 	pip install opencv-python; \
 	pip install pyinstaller==3.3.1; \
 
@@ -40,7 +39,7 @@ app:
 	fi
 	make deps; \
 	source venv/bin/activate; \
-	pyinstaller src/biathlon_main.py --onefile --ico=assets/icon.ico --name="USBA Data Collection Interface" --debug; \
+	pyinstaller src/biathlon_main.py --onefile --windowed --ico=assets/icon.ico --name="USBA Data Collection Interface" --debug; \
 
 # executes single-file application
 exec:

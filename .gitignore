@@ -4,3 +4,4 @@
 /dist
 /.vscode
 /src/__pycache__/
+/stored_data
