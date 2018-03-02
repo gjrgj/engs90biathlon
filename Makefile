@@ -19,7 +19,6 @@ env:
 	if [ ! -d "venv" ]; then \
 		pip3 install virtualenv; \
 		python3 -m venv venv; \
-		source venv/bin/activate; \
 	fi
 
 # installs all dependencies
@@ -35,8 +34,18 @@ deps:
 # installs all dependencies and then makes the single executable app, make sure you have activated the virtual environment first
 # Note that this is not currently functional and needs work.
 app:
+	if [ ! -d "venv" ]; then \
+		pip3 install virtualenv; \
+		python3 -m venv venv; \
+	fi
 	make deps; \
-	pyinstaller src/biathlon_main.py --windowed; \
+	source venv/bin/activate; \
+	pyinstaller src/biathlon_main.py --onefile --ico=assets/icon.ico --name="USBA Data Collection Interface" --debug; \
+
+# executes single-file application
+exec:
+	source venv/bin/activate; \
+	./dist/USBA\ Data\ Collection\ Interface; \
 
 # removes everything except the virtual environment and code source files
 clean:
@@ -46,7 +55,7 @@ clean:
 	rm -rf build
 	rm -rf dist
 	rm -f src/*.pyc
-	rm -f biathlon_main.spec
+	rm -f USBA\ Data\ Collection\ Interface.spec
 	rm -rf .eggs
 
 # removes everything except the code source files

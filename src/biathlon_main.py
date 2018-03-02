@@ -170,6 +170,7 @@ def connectPi():
 	if connected_to_rifle == False:
 		# if no error, successfully connected to rifle
 		success, error = iface.associateToNetwork_password_error_(network, 'biathlon', None)
+		time.sleep(3)
 		if str(error) == 'None':
 			print('Successfully connected to rifle!')
 		else:
@@ -228,7 +229,7 @@ def connectPi():
 			tty.setcbreak(sys.stdin.fileno())
 			chan.settimeout(0.0)
 			# send command to Pi to trigger data collection and gather the results through ssh
-			chan.send('python ~/biathlon/demo_readvoltage.py\n')
+			chan.send('python ~/biathlon/readvoltage.py\n')
 			while True:
 				r, w, e = select.select([chan, sys.stdin], [], [])
 				if chan in r:
@@ -267,6 +268,7 @@ def connectPi():
 
 						# parsing error in incoming data, skip it
 						else:
+							print("error in x = " + str(x))
 							continue
 
 					except socket.timeout:
@@ -391,7 +393,7 @@ class MainWindow(QMainWindow):
 		adc1.setClipToView(True)
 		adc2.setClipToView(True)
 		# set axis parameters
-		adc1.setRange(xRange=[-100, 10], yRange=[math.sqrt(2.5),math.sqrt(5)])
+		adc1.setRange(xRange=[-100, 10], yRange=[math.sqrt(3),math.sqrt(3.7)])
 		adc1.setLimits(xMax=10, yMax=5, yMin=-1)
 		adc2.setRange(xRange=[-100, 10], yRange=[-1,5])
 		adc2.setLimits(xMax=10, yMax=5, yMin=-1)

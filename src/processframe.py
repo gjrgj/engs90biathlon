@@ -10,8 +10,8 @@ class ProcessFrame:
 
 		frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
 		#frame = cv2.medianBlur(frame,3)
-		circles = cv2.HoughCircles(frame,cv2.HOUGH_GRADIENT,1,20,
-			param1=100,param2=100,minRadius=85,maxRadius=125)
+		circles = cv2.HoughCircles(frame,cv2.HOUGH_GRADIENT,2.5,250,
+            param1=36,param2=60,minRadius=65,maxRadius=78)
 
 		return circles
 
