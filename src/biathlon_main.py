@@ -38,9 +38,12 @@ from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from pyqtgraph.Qt import QtGui, QtCore, QtWidgets
+from pyqtgraph.graphicsItems import *
 import numpy as np
 import pyqtgraph as pg
+import imutils
 global curve1, curve2, app
+pg.setConfigOption("imageAxisOrder", "row-major")
 
 # opencv for laser tracking
 import cv2
@@ -48,9 +51,6 @@ from processframe import ProcessFrame
 
 # csv and video file writing
 import csv
-from Queue import Queue
-global frame_queue
-frame_queue = Queue()
 
 # rounds time to seconds
 def round_seconds(dt):
@@ -70,7 +70,7 @@ timestamps_loaded = [0]
 isLoading = False
 
 # video
-global video
+global video, mainwindow, current_frame
 
 # foldername will be updated with each press of the Capture button
 global folderName, fileName, filePointer, fileWriter, isLogging, startTime
@@ -289,16 +289,72 @@ class MainWindow(QMainWindow):
 		self.label.setPixmap(pixmap)
 	
 	def initUI(self):
-		global app, adc1, adc2, curve1, curve2, ptr, window, video
+		global app, adc1, adc2, curve1, curve2, ptr, window, current_frame, video
 
-		# define a top-level widget to hold everything
-		window = pg.GraphicsLayoutWidget()
+		# set up main window, init, resize, etc
+		window = pg.GraphicsView()
+		screen_resolution = app.desktop().screenGeometry()
+		screenWidth, screenHeight = screen_resolution.width(), screen_resolution.height()	
+		window.resize(screenWidth,screenHeight)
 		window.setWindowTitle('Biathlon Team Data Processing')
+		window.show()
+		layout = pg.GraphicsLayout(border=(100,100,100))
+		window.setCentralItem(layout)
 
-		adc1 = window.addPlot(row=0,col=0,title="Hall Effect Sensor Voltage vs Time", 
+		# add plots
+		adc1 = layout.addPlot(row=0,col=0,rowspan=3,colspan=3,title="Hall Effect Sensor Voltage vs Time", 
 			labels={'left': 'Square Root of Voltage (V)', 'bottom': 'Time (seconds)'})
-		adc2 = window.addPlot(row=0,col=1,title="Force Sensor Voltage vs Time",
+		adc2 = layout.addPlot(row=3,col=0,rowspan=3,colspan=3,title="Force Sensor Voltage vs Time",
 			labels={'left': 'Voltage (V)', 'bottom': 'Time (seconds)'})
+
+		# add button control
+		# start capture
+		proxy_start = QtGui.QGraphicsProxyWidget()
+		startCap = QtGui.QPushButton('Start Data Capture')
+		startCap.clicked.connect(self.startCapture)
+		proxy_start.setWidget(startCap)
+		laystart = layout.addViewBox(row=3, col=3, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
+		laystart.addItem(proxy_start)
+		laystart.autoRange()
+		# end capture
+		proxy_end = QtGui.QGraphicsProxyWidget()
+		endCap = QtGui.QPushButton('End Data Capture')
+		endCap.clicked.connect(self.endCapture)
+		proxy_end.setWidget(endCap)
+		layend = layout.addViewBox(row=3, col=4, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
+		layend.addItem(proxy_end)
+		layend.autoRange()
+		# load capture
+		proxy_load = QtGui.QGraphicsProxyWidget()
+		loadCap = QtGui.QPushButton('Load and Replay Data')
+		loadCap.clicked.connect(self.loadCapture)
+		proxy_load.setWidget(loadCap)
+		layload = layout.addViewBox(row=4, col=3, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
+		layload.addItem(proxy_load)
+		layload.autoRange()
+
+		# exit program
+		proxy_exit = QtGui.QGraphicsProxyWidget()
+		exitCap = QtGui.QPushButton('Exit Program')
+		exitCap.clicked.connect(self.exitProgram)
+		proxy_exit.setWidget(exitCap)
+		layexit = layout.addViewBox(row=4, col=4, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
+		layexit.addItem(proxy_exit)
+		layexit.autoRange()
+
+		# add video display
+		self.capture = 0
+		# start video stream
+		if not self.capture:
+			self.capture = QtCapture(0)
+			exitCap.clicked.connect(self.capture.stop)
+			self.capture.setParent(self)
+			self.capture.setWindowFlags(QtCore.Qt.Tool)
+		self.capture.start()
+		videoDisplay = layout.addViewBox(row=0, col=3,rowspan=3,colspan=3, lockAspect=True, enableMouse=False)
+		current_frame = pg.ImageItem(np.zeros((self.capture.height,self.capture.width,3), np.uint8))
+		videoDisplay.addItem(current_frame)
+		videoDisplay.autoRange()
 
 		# antialiasing for better plots
 		pg.setConfigOptions(antialias=True)
@@ -315,6 +371,7 @@ class MainWindow(QMainWindow):
 		adc1.setLimits(xMax=10, xMin=-15, yMax=5, yMin=-1)
 		adc2.setRange(xRange=[-10, 1], yRange=[-1,5])
 		adc2.setLimits(xMax=10, xMin=-15, yMax=5, yMin=-1)
+
 		# makes color of both pens yellow
 		curve1 = adc1.plot(pen='y')
 		curve2 = adc2.plot(pen='y')
@@ -338,7 +395,7 @@ class MainWindow(QMainWindow):
 
 		timer = QtCore.QTimer()
 		timer.timeout.connect(update)
-		timer.start(50)
+		timer.start(10)
 
 		# Display the widget as a new window
 		window.show()
@@ -351,154 +408,12 @@ class MainWindow(QMainWindow):
 		if event.key() == Qt.Key_Escape:
 			self.close()
 
-
-# used to capture video stream
-class QtCapture(QtGui.QWidget):
-	def __init__(self, *args):
-		global isLogging
-		super(QtGui.QWidget, self).__init__()
-		self.cap = cv2.VideoCapture(*args)
-		self.capLoaded = 0
-		# set camera resolution to 1280x720 to allow us to take 60 fps video, 640x480 can be used for 120 fps and 1920x1080 can be used for 30 fps.
-		# set fps as well
-		self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
-		self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,1280)
-		self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
-		self.cap.set(cv2.CAP_PROP_FPS, 60)
-		self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-
-		# save height and width for easy access
-		self.height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-		self.width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-		self.out = 0
-		self.video_frame = QtGui.QLabel()
-		lay = QtGui.QVBoxLayout()
-
-		lay.addWidget(self.video_frame)
-		self.setLayout(lay)
-
-		# turn file logging on or off
-		isLogging = False
-		print("resolution = " + str(self.width) + "x" + str(self.height))
-		print("fps = " + str(self.fps))
-
-
-	def setFPS(self, fps):
-		self.fps = fps
-
-	def displayNextFrame(self):
-		global isLogging, frame_queue, isLoading
-		# display frame either from live usb camera or loaded file depending on current mode
-		if not isLoading:
-			ret, frame = self.cap.read()
-			frame = laser_tracking_overlay(ret, frame, self.height, self.width)
-		else:
-			ret, frame = self.capLoaded.read()
-		if isLogging:
-			# add frame to queue to be written
-			frame_queue.put(frame)
-			# draw recording symbol on video feed to show it's capturing
-			cv2.circle(frame,(int(self.width - 60), int(60)), 30, (0, 0, 255), -1)
-			cv2.putText(frame, 'REC', (int(self.width - 165), int(70)), cv2.FONT_HERSHEY_PLAIN, 2,(0,0,0), 4, lineType=8)
-		if not isLogging and frame_queue.empty == False:
-			cv2.putText(frame, 'PROCESSING FRAMES', (int(self.width/30), int(self.height/2)), cv2.FONT_HERSHEY_PLAIN, 7,(0,0,0), 7, lineType=8)
-			cv2.putText(frame, 'PLEASE WAIT', (int(23*self.width/100), int(2 * self.height/3)), cv2.FONT_HERSHEY_PLAIN, 7,(0,0,0), 8, lineType=8)
-		# resize frame to smaller size for ease of display
-		frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) 
-		# convert frame colors for proper display
-		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)	
-		img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], QtGui.QImage.Format_RGB888)
-		pix = QtGui.QPixmap.fromImage(img)
-		self.video_frame.setPixmap(pix)
-
-	def start(self):
-		self.timer = QtCore.QTimer()
-		self.timer.timeout.connect(self.displayNextFrame)
-		self.timer.start(1000./self.fps)
-
-	def stop(self):
-		self.timer.stop()
-
-	def deleteLater(self):
-		self.cap.release()
-		super(QtGui.QWidget, self).deleteLater()
-
-
-# utilize a queue/buffer to separate video file writing from the main thread so it doesn't block anything
-def videoFileWriting():
-	global frame_queue, isLogging, video, isLogging
-	# only save frame if logging
-	while frame_queue.empty() == False:
-		video.capture.out.write(frame_queue.get())
-		time.sleep(1/video.capture.fps)
-
-# laser tracking
-def laser_tracking_overlay(ret, frame, width, height):
-	# the nitty-gritty math is abstracted away in the ProcessFrame() class
-	pf = ProcessFrame()
-	if ret == True:
-		# Find the laser
-		center = pf.find_laser(frame)
-		# Find the targets
-		circles = pf.find_targets(frame)
-		# check if found, if not then just display the regular frame, if so then overlay tracking
-		if circles is not None and center is not None:
-			# Draw circles
-			circles = np.uint16(np.around(circles))
-			for i in circles[0,:]:
-				cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
-				cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
-			# Draw laser
-			cv2.circle(frame, center, 6, (0, 255, 0), -1)
-		return frame
-
-# control panel 
-class VideoWindow(QtWidgets.QWidget):
-	def __init__(self):
-		QtWidgets.QWidget.__init__(self)
-		self.setWindowTitle('Control Panel')
-
-		self.capture = 0
-		self.start_button = QtGui.QPushButton('Start Data Capture',self)
-		self.start_button.clicked.connect(self.startCapture)
-
-		self.end_button = QtGui.QPushButton('End Data Capture',self)
-		self.end_button.clicked.connect(self.endCapture)
-
-		self.load_button = QtGui.QPushButton('Load and Replay Data',self)
-		self.load_button.clicked.connect(self.loadCapture)
-
-		self.exit_button = QtGui.QPushButton('Exit Program',self)
-		self.exit_button.clicked.connect(self.exitProgram)
-
-		vbox = QtGui.QVBoxLayout(self)
-		vbox.addWidget(self.start_button)
-		vbox.addWidget(self.end_button)
-		vbox.addWidget(self.load_button)
-		vbox.addWidget(self.exit_button)
-
-		self.setLayout(vbox)
-		self.setGeometry(100,100,200,200)
-		self.show()
-
-		# start video stream
-		if not self.capture:
-			self.capture = QtCapture(0)
-			self.exit_button.clicked.connect(self.capture.stop)
-			self.capture.setParent(self)
-			self.capture.setWindowFlags(QtCore.Qt.Tool)
-		self.capture.start()
-		self.capture.show()
-
-
 	# start capture does the following:
 	# 1) Generates a folder according to the timestamp that the button was clicked
 	# 2) Opens a .csv file that immediately begins logging data from the Pi (that is already coming in)
 	# 3) Opens a .avi file that immediately begins writing frames from the attached camera (that are already coming in)
 	def startCapture(self):
-		global folderName, startTime, isLogging, wp, fileWriter, frame_queue
-		# reset the contents of frame_queue
-		frame_queue = Queue()
+		global folderName, startTime, isLogging, wp, fileWriter
 		# only runs if not currently capturing
 		if not isLogging and not isLoading:
 			startTime = datetime.now()
@@ -510,16 +425,14 @@ class VideoWindow(QtWidgets.QWidget):
 			# write to CSV file, column headers first
 			with open("stored_data/" + folderName + "/sensor_data.csv", "w+") as filePointer:
 				csv.writer(filePointer, delimiter=',').writerow(['Square Root of Hall Effect Sensor Voltage (V)', 'Force Sensor Voltage (V)', 'Time (seconds)'])
-			# set up video writer
-			self.capture.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.avi", cv2.VideoWriter_fourcc((*'XVID')), self.capture.fps, (int(self.capture.width),int(self.capture.height)))
+			# set up video writer, note that due to quirks of how opencv records video this must be set up to gather 1/3 the stated fps
+			self.capture.out = cv2.VideoWriter("stored_data/" + folderName + "/laser_data.avi", cv2.VideoWriter_fourcc((*'MJPG')), int(self.capture.fps/3), (int(self.capture.width),int(self.capture.height)))
 
 	# end current capture and set logging to false
 	def endCapture(self):
-		global isLogging, isLoading, wp
-		# write all frames to file first, turn off logging too
+		global isLogging
+		# turn off logging, triggers other processes to stop too
 		isLogging = False
-		videoWorker = Worker(videoFileWriting)
-		wp.threadpool.start(videoWorker)	
 
 	# can only load data if not logging, so if this is pressed will end current logging and load from disk
 	def loadCapture(self):
@@ -566,8 +479,91 @@ class VideoWindow(QtWidgets.QWidget):
 		qApp.exit();
 
 
+# used to capture video stream
+class QtCapture(QtGui.QWidget):
+	def __init__(self, *args):
+		global isLogging
+		super(QtGui.QWidget, self).__init__()
+		self.cap = cv2.VideoCapture(*args)
+		self.capLoaded = 0
+		# set camera resolution to 1280x720 to allow us to take 60 fps video, 640x480 can be used for 120 fps and 1920x1080 can be used for 30 fps.
+		# set fps as well
+		self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 10)
+		self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,1280)
+		self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
+		self.cap.set(cv2.CAP_PROP_FPS, 60)
+		self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+
+		# save height and width for easy access
+		self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+		self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+		self.out = 0
+
+		# turn file logging on or off
+		isLogging = False
+		print("resolution = " + str(self.width) + "x" + str(self.height))
+		print("fps = " + str(self.fps))
+
+	def setFPS(self, fps):
+		self.fps = fps
+
+	def displayNextFrame(self):
+		global isLogging, isLoading, mainwindow
+		# display frame either from live usb camera or loaded file depending on current mode
+		if not isLoading:
+			ret, frame = self.cap.read()
+		else:
+			ret, frame = self.capLoaded.read()
+		if isLogging:
+    		# overlay laser tracking on frame
+			frame = cv2.flip(frame,0)
+			frame = laser_tracking_overlay(ret, frame, self.height, self.width)
+			# write frame to file
+			mainwindow.capture.out.write(frame)
+			# draw recording symbol on video feed to show it's capturing
+			cv2.circle(frame,(int(self.width - 60), int(60)), 30, (0, 0, 255), -1)
+			cv2.putText(frame, 'REC', (int(self.width - 165), int(70)), cv2.FONT_HERSHEY_PLAIN, 2,(0,0,0), 4, lineType=8)
+			frame = cv2.flip(frame,0)
+		# convert frame colors for proper display
+		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)	
+		current_frame.setImage(frame)
+		# self.video_frame.setPixmap(pix)
+
+	def start(self):
+		self.timer = QtCore.QTimer()
+		self.timer.timeout.connect(self.displayNextFrame)
+		self.timer.start(1000./self.fps)
+
+	def stop(self):
+		self.timer.stop()
+
+	def deleteLater(self):
+		self.cap.release()
+		super(QtGui.QWidget, self).deleteLater()
+
+
+# laser tracking
+def laser_tracking_overlay(ret, frame, width, height):
+	# the nitty-gritty math is abstracted away in the ProcessFrame() class
+	pf = ProcessFrame()
+	if ret == True:
+		# Find the laser
+		center = pf.find_laser(frame)
+		# Find the targets
+		circles = pf.find_targets(frame)
+		# check if found, if not then just display the regular frame, if so then overlay tracking
+		if circles is not None and center is not None:
+			# Draw circles
+			circles = np.uint16(np.around(circles))
+			for i in circles[0,:]:
+				cv2.circle(frame,(i[0],i[1]),i[2],(0,255,0),2) # Draw the outer circle
+				cv2.circle(frame,(i[0],i[1]),2,(0,0,255),3) # Draw the center
+			# Draw laser
+			cv2.circle(frame, center, 6, (0, 255, 0), -1)
+		return frame
+
 def main():
-	global adc_value1, adc_value2, app, wp, video
+	global adc_value1, adc_value2, app, wp, video, mainwindow
 	# set up QT
 	app = QtGui.QApplication(sys.argv)
 	# set up threadpool and begin connection to pi
@@ -576,7 +572,6 @@ def main():
 	wp.threadpool.start(dataWorker)
 	# init graphics
 	mainwindow = MainWindow()
-	video = VideoWindow()
 	# init qt event loop
 	sys.exit(mainwindow.beginGraphics())
 

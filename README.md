@@ -16,7 +16,7 @@ Note: We make use of Python virtual environments to standardize expected behavio
 # OPERATION
 First, turn on the Pi Zero attached to your rifle. Make sure it has been on for at least a minute or so before proceeding as it takes a bit of time to set up the onboard wifi and DHCP server. Next, run the command `make run` in Terminal and wait for a connection to be made between your computer and the rifle. If successful, everything should boot up and data should begin being collected. If you wish to run laser tracking, click *Start* on the control panel that comes up.
 
-Note that sometimes the connection isn't made on the first try. If that happens, just run `make run` until it successfully connects. Data will be stored in folders within `stored_data` where folder names are timestamped based on when the data capture began. Each folder will contain a `.csv` file with logged sensor data and a `.mp4` file with logged laser tracking data.
+Note that sometimes the connection isn't made on the first try. If that happens, just run `make run` until it successfully connects. Data will be stored in folders within `stored_data` where folder names are timestamped based on when the data capture began. Each folder will contain a `.csv` file with logged sensor data and a `.avi` file with logged laser tracking data. These can be viewed in most common spreadsheet/video viewing software.
 
 # FAQ
 ### Why can I not access the internet during operation?
