@@ -1,6 +1,8 @@
 # engs90biathlon
 An app written for Engs 90 in partnership with the US Biathlon Team.
 
+![GUI](/assets/gui.png)
+
 # PREREQUISITES
 First, open a Terminal window. If you don't have Python 3 installed on your computer, you can get it by using Homebrew. If you don't have Homebrew, install it first by running the following command in Terminal:
 

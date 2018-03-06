@@ -4,7 +4,7 @@
 # Within is outlined a data collection interface that utilizes the Raspberry Pi and a couple of Python open-source libraries.
 # Special thanks to the creators of paramiko and pyqtgraph, without them this project wouldn't have been possible.
 #
-# All code written by George Hito.
+# All code written by George Hito, besides the laser tracking which was written by Graeme Gengras.
 # Currently only functional on OSX.
 
 import signal
@@ -48,6 +48,8 @@ pg.setConfigOption("imageAxisOrder", "row-major")
 # opencv for laser tracking
 import cv2
 from processframe import ProcessFrame
+# global pf
+# pf = ProcessFrame()
 
 # csv and video file writing
 import csv
@@ -70,7 +72,7 @@ timestamps_loaded = [0]
 isLoading = False
 
 # video
-global video, mainwindow, current_frame
+global mainwindow, current_frame
 
 # foldername will be updated with each press of the Capture button
 global folderName, fileName, filePointer, fileWriter, isLogging, startTime
@@ -289,7 +291,7 @@ class MainWindow(QMainWindow):
 		self.label.setPixmap(pixmap)
 	
 	def initUI(self):
-		global app, adc1, adc2, curve1, curve2, ptr, window, current_frame, video
+		global app, adc1, adc2, curve1, curve2, ptr, window, current_frame
 
 		# set up main window, init, resize, etc
 		window = pg.GraphicsView()
@@ -325,20 +327,28 @@ class MainWindow(QMainWindow):
 		layend.addItem(proxy_end)
 		layend.autoRange()
 		# load capture
-		proxy_load = QtGui.QGraphicsProxyWidget()
-		loadCap = QtGui.QPushButton('Load and Replay Data')
-		loadCap.clicked.connect(self.loadCapture)
-		proxy_load.setWidget(loadCap)
-		layload = layout.addViewBox(row=4, col=3, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
-		layload.addItem(proxy_load)
-		layload.autoRange()
+		# proxy_load = QtGui.QGraphicsProxyWidget()
+		# loadCap = QtGui.QPushButton('Load and Replay Data')
+		# loadCap.clicked.connect(self.loadCapture)
+		# proxy_load.setWidget(loadCap)
+		# layload = layout.addViewBox(row=4, col=3, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
+		# layload.addItem(proxy_load)
+		# layload.autoRange()
+		
+		# logo
+		logoDisplay = layout.addViewBox(row=4, col=4,rowspan=1,colspan=1, lockAspect=True, enableMouse=False, invertY=True)
+		img = cv2.imread('logo.jpg', cv2.IMREAD_UNCHANGED)
+		img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)	
+		logo = pg.ImageItem(img)
+		logoDisplay.addItem(logo)
+		logoDisplay.autoRange()
 
 		# exit program
 		proxy_exit = QtGui.QGraphicsProxyWidget()
 		exitCap = QtGui.QPushButton('Exit Program')
 		exitCap.clicked.connect(self.exitProgram)
 		proxy_exit.setWidget(exitCap)
-		layexit = layout.addViewBox(row=4, col=4, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
+		layexit = layout.addViewBox(row=4, col=3, colspan=1, rowspan=1,invertY=True, lockAspect=True, enableMouse=False)
 		layexit.addItem(proxy_exit)
 		layexit.autoRange()
 
@@ -354,7 +364,6 @@ class MainWindow(QMainWindow):
 		videoDisplay = layout.addViewBox(row=0, col=3,rowspan=3,colspan=3, lockAspect=True, enableMouse=False)
 		current_frame = pg.ImageItem(np.zeros((self.capture.height,self.capture.width,3), np.uint8))
 		videoDisplay.addItem(current_frame)
-		videoDisplay.autoRange()
 
 		# antialiasing for better plots
 		pg.setConfigOptions(antialias=True)
@@ -366,8 +375,8 @@ class MainWindow(QMainWindow):
 		adc2.setClipToView(True)
 
 		# set axis parameters
-		# adc1.setRange(xRange=[-100, 10], yRange=[math.sqrt(3),math.sqrt(3.7)])
-		adc1.setRange(xRange=[-10, 1], yRange=[-1,5])
+		adc1.setRange(xRange=[-100, 10], yRange=[math.sqrt(3),math.sqrt(4.3)])
+		# adc1.setRange(xRange=[-10, 1], yRange=[-1,5])
 		adc1.setLimits(xMax=10, xMin=-15, yMax=5, yMin=-1)
 		adc2.setRange(xRange=[-10, 1], yRange=[-1,5])
 		adc2.setLimits(xMax=10, xMin=-15, yMax=5, yMin=-1)
@@ -514,6 +523,7 @@ class QtCapture(QtGui.QWidget):
 			ret, frame = self.cap.read()
 		else:
 			ret, frame = self.capLoaded.read()
+		frame = cv2.flip(frame,1)
 		if isLogging:
     		# overlay laser tracking on frame
 			frame = cv2.flip(frame,0)
@@ -563,7 +573,7 @@ def laser_tracking_overlay(ret, frame, width, height):
 		return frame
 
 def main():
-	global adc_value1, adc_value2, app, wp, video, mainwindow
+	global adc_value1, adc_value2, app, wp, mainwindow
 	# set up QT
 	app = QtGui.QApplication(sys.argv)
 	# set up threadpool and begin connection to pi

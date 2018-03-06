@@ -25,7 +25,7 @@ dll_excludes = ['libgdk-win32-2.0-0.dll', 'libgobject-2.0-0.dll', 'tcl84.dll',
 icon_resources = []
 bitmap_resources = []
 other_resources = []
-data_files = []
+data_files = ['logo.jpg']
 setup(
     app=APP,
     data_files=data_files,

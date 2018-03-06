@@ -23,8 +23,9 @@ env:
 
 # installs all dependencies
 deps: 
+	make env; \
 	source venv/bin/activate; \
-	pip install PyQt5; \
+	pip install pyqt5; \
 	pip install pyqtgraph; \
 	pip install paramiko; \
 	pip install ffmpeg-python; \
